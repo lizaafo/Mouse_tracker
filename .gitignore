@@ -1,0 +1,22 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Editor directories
+.vscode/
+.idea/
+
+# Temporary and backup files
+*.tmp
+*.bak
+*_prev.docx
