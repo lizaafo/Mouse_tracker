@@ -47,6 +47,17 @@ def constant_value(df, name, fallback):
     return str(valid.iloc[0])
 
 
+def compute_total_angle_change(points):
+    """Compute total absolute angular change in radians from discrete trajectory points."""
+    if len(points) < 2:
+        return np.nan
+    vectors = np.diff(points, axis=0)
+    angles = np.arctan2(vectors[:, 1], vectors[:, 0])
+    change = np.diff(angles)
+    wrapped = np.arctan2(np.sin(change), np.cos(change))
+    return float(np.abs(wrapped).sum()) if len(wrapped) else 0.0
+
+
 def estimate_curvature(points, segment_lengths, count, window):
     # Resample only the geometric copy; repeated timed samples remain in the source.
     distance = np.r_[0.0, np.cumsum(segment_lengths)]
@@ -231,16 +242,8 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
             sx, sy, tx, ty = values
             result["target_center_distance"] = float(np.hypot(tx - sx, ty - sy))
 
-        # Wrapped angle differences avoid artificial jumps at -pi/pi.
-         # Total angle change fallback for short paths with fewer than 7 points
-        if len(clean) >= 2:
-            v_short = np.diff(clean, axis=0)
-            a_short = np.arctan2(v_short[:, 1], v_short[:, 0])
-            c_short = np.diff(a_short)
-            w_short = np.arctan2(np.sin(c_short), np.cos(c_short))
-            result["total_angle_change"] = float(np.abs(w_short).sum())
-        else:
-            result["total_angle_change"] = np.nan
+        # Compute total angular change across all moving positions
+        result["total_angle_change"] = compute_total_angle_change(clean)
 
         result.update(mean_curvature=np.nan, max_curvature=np.nan,
                       p95_curvature=np.nan, max_source_step_px=float(max(segments, default=0)))
@@ -251,8 +254,7 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         else:
             profile = local_curvature_profile(clean, segments, num_resample_points, smoothing_window)
             used = profile["used"]
-            result.update(total_angle_change=profile["total_angle_change"],
-                          smoothing_span_px=float(profile["span_px"]),
+            result.update(smoothing_span_px=float(profile["span_px"]),
                           curvature_coverage_pct=profile["coverage_pct"],
                           curvature_used_points=int(used.sum()),
                           curvature_total_points=len(used),

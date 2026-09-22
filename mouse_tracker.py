@@ -628,7 +628,6 @@ cancel_button.pack(side=tk.LEFT, padx=5)
 
 
 # Connect mouse events to their functions
-# Connect mouse events to their functions
 canvas.bind("<Button-1>", start_recording)
 canvas.bind("<Leave>", on_canvas_leave)
 canvas.bind("<Motion>", on_mouse_move)
