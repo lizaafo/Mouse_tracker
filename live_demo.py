@@ -260,12 +260,12 @@ class LiveDemoApp:
 
     def _build_ui(self):
         # 1. Header Frame
-        header = tk.Frame(self.root, bg="#263238", pady=10)
+        header = tk.Frame(self.root, bg="#263238", pady=8)
         header.pack(fill=tk.X)
         title = tk.Label(
             header,
             text="מערכת הדגמה חיה: זיהוי בוטים לפי גאומטריה וקינמטיקה",
-            font=("Helvetica", 16, "bold"),
+            font=("Helvetica", 15, "bold"),
             fg="white",
             bg="#263238",
         )
@@ -277,11 +277,23 @@ class LiveDemoApp:
             fg="#b0bec5",
             bg="#263238",
         )
-        subtitle.pack(pady=2)
+        subtitle.pack(pady=1)
 
-        # 2. Live Decision Card (כרטיס תוצאה מודגש)
-        self.card_frame = tk.Frame(self.root, bg="#eceff1", bd=2, relief=tk.SOLID, padx=15, pady=10)
-        self.card_frame.pack(fill=tk.X, padx=15, pady=8)
+        # 2. Drawing Canvas (Packed right under header - completely stable coordinate frame)
+        canvas_frame = tk.Frame(self.root, bg="#cfd8dc", bd=1, relief=tk.SUNKEN)
+        canvas_frame.pack(padx=15, pady=6)
+        self.canvas = tk.Canvas(canvas_frame, width=920, height=440, bg="white", highlightthickness=0)
+        self.canvas.pack()
+
+        self.canvas.bind("<Button-1>", self.on_start_click)
+        self.canvas.bind("<Motion>", self.on_mouse_motion)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_motion)
+        self.canvas.bind("<Leave>", self.on_leave)
+
+        # 3. Live Decision Card (כרטיס תוצאה מודגש - מקובע מתחת לקנבס בגובה קבוע שלא מזיז שום אלמנט)
+        self.card_frame = tk.Frame(self.root, bg="#eceff1", bd=2, relief=tk.SOLID, padx=15, pady=6, height=90)
+        self.card_frame.pack(fill=tk.X, padx=15, pady=4)
+        self.card_frame.pack_propagate(False)  # מונע כל שינוי גודל או תזוזת פיקסלים בממשק
 
         self.card_verdict = tk.Label(
             self.card_frame,
@@ -290,7 +302,7 @@ class LiveDemoApp:
             bg="#eceff1",
             fg="#455a64",
         )
-        self.card_verdict.pack()
+        self.card_verdict.pack(pady=2)
 
         self.card_details = tk.Label(
             self.card_frame,
@@ -299,18 +311,7 @@ class LiveDemoApp:
             bg="#eceff1",
             fg="#607d8b",
         )
-        self.card_details.pack(pady=3)
-
-        # 3. Drawing Canvas
-        canvas_frame = tk.Frame(self.root, bg="#cfd8dc", bd=1, relief=tk.SUNKEN)
-        canvas_frame.pack(padx=15, pady=4)
-        self.canvas = tk.Canvas(canvas_frame, width=920, height=440, bg="white", highlightthickness=0)
-        self.canvas.pack()
-
-        self.canvas.bind("<Button-1>", self.on_start_click)
-        self.canvas.bind("<Motion>", self.on_mouse_motion)
-        self.canvas.bind("<B1-Motion>", self.on_mouse_motion)
-        self.canvas.bind("<Leave>", self.on_leave)
+        self.card_details.pack(pady=2)
 
         # 4. Controls Frame
         controls = tk.Frame(self.root, pady=8)
@@ -530,6 +531,8 @@ class LiveDemoApp:
         if not self.recording:
             return
         prev = self.trajectory[-1]
+        if x == prev["x"] and y == prev["y"]:
+            return
         self.trajectory.append({"x": x, "y": y, "time": elapsed})
 
         # Draw line segment
