@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+"""
+generate_evolution_pdf.py
+
+Converts docs/PROJECT_EVOLUTION_AND_STAGES_HE.md into an elegant, styled
+academic PDF document using headless Google Chrome.
+"""
+
+import os
+from pathlib import Path
+import subprocess
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DOCS_DIR = BASE_DIR / "docs"
+MD_FILE = DOCS_DIR / "PROJECT_EVOLUTION_AND_STAGES_HE.md"
+HTML_FILE = DOCS_DIR / "PROJECT_EVOLUTION_AND_STAGES_HE.html"
+OUTPUT_PDF = DOCS_DIR / "PROJECT_EVOLUTION_AND_STAGES_HE.pdf"
+ROOT_PDF = BASE_DIR / "PROJECT_EVOLUTION_AND_STAGES_HE.pdf"
+
+
+def build_html():
+    html = """<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>סיכום שלבי העבודה, ההתפתחות וההיגיון המדעי בפרויקט</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+  },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+<style>
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm 16mm;
+  @bottom-center {
+    content: counter(page);
+    font-size: 9pt;
+    color: #555;
+  }
+}
+
+body {
+  font-family: 'Segoe UI', Arial, 'Heebo', sans-serif;
+  color: #1a202c;
+  line-height: 1.6;
+  font-size: 10pt;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+}
+
+h1, h2, h3, h4 {
+  color: #1a365d;
+  font-weight: 700;
+  margin-top: 1.1em;
+  margin-bottom: 0.4em;
+  page-break-after: avoid;
+}
+
+h1 {
+  font-size: 20pt;
+  border-bottom: 2px solid #2b6cb0;
+  padding-bottom: 6px;
+  text-align: center;
+  margin-top: 0.5em;
+  margin-bottom: 0.8em;
+}
+
+h2 {
+  font-size: 13pt;
+  border-bottom: 1px solid #cbd5e0;
+  padding-bottom: 4px;
+  color: #2c5282;
+  margin-top: 1.4em;
+}
+
+h3 {
+  font-size: 10.5pt;
+  color: #2b6cb0;
+  margin-bottom: 0.2em;
+}
+
+p {
+  margin-top: 0;
+  margin-bottom: 0.7em;
+  text-align: justify;
+}
+
+.header-card {
+  background: #edf2f7;
+  border-right: 5px solid #2b6cb0;
+  padding: 14px 18px;
+  border-radius: 6px;
+  margin-bottom: 22px;
+  font-size: 10pt;
+}
+
+.roadmap-box {
+  background: #f7fafc;
+  border: 1px dashed #cbd5e0;
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 8.5pt;
+  direction: ltr;
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.stage-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  page-break-inside: avoid;
+}
+
+.stage-title {
+  font-size: 12.5pt;
+  font-weight: 700;
+  color: #2b6cb0;
+  border-bottom: 1px solid #edf2f7;
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.stage-badge {
+  background: #2b6cb0;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 9pt;
+  margin-left: 8px;
+}
+
+.section-label {
+  font-weight: bold;
+  color: #2d3748;
+  margin-top: 6px;
+}
+
+.action-box {
+  background: #f8fafc;
+  border-right: 3px solid #4299e1;
+  padding: 8px 12px;
+  margin: 6px 0;
+  font-size: 9.5pt;
+}
+
+.rationale-box {
+  background: #f0fff4;
+  border-right: 3px solid #38a169;
+  padding: 8px 12px;
+  margin: 6px 0;
+  font-size: 9.5pt;
+}
+
+.challenge-box {
+  background: #fffaf0;
+  border-right: 3px solid #dd6b20;
+  padding: 8px 12px;
+  margin: 6px 0;
+  font-size: 9.5pt;
+}
+
+.defense-pitch {
+  background: #ebf8ff;
+  border: 2px solid #3182ce;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-top: 25px;
+  font-size: 10.5pt;
+  line-height: 1.65;
+  page-break-inside: avoid;
+}
+
+.defense-pitch h3 {
+  color: #2b6cb0;
+  margin-top: 0;
+  font-size: 12pt;
+}
+
+ul, ol {
+  margin-top: 0;
+  margin-bottom: 0.6em;
+  padding-right: 18px;
+}
+
+li {
+  margin-bottom: 3px;
+}
+
+code {
+  font-family: 'Consolas', 'Menlo', monospace;
+  background: #edf2f7;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 8.5pt;
+  direction: ltr;
+  display: inline-block;
+}
+
+.page-break {
+  page-break-before: always;
+}
+</style>
+</head>
+<body>
+
+<h1>סיכום שלבי העבודה, ההתפתחות וההיגיון המדעי בפרויקט</h1>
+
+<div class="header-card">
+  <strong>פרויקט:</strong> זיהוי בוטים בתנועות עכבר באמצעות גאומטריה יישומית וקינמטיקה (Kinematic Bot Detection)<br>
+  <strong>קורס אקדמי:</strong> גאומטריה יישומית (Applied Geometry)<br>
+  <strong>מטרה:</strong> תיעוד רציף של שבעת שלבי הפיתוח, האתגרים שעלו בכל שלב, והרציונל המדעי שהוביל לשלב הבא.
+</div>
+
+<div class="roadmap-box">
+[שלב 1: איסוף ראשוני] ──> [שלב 2: בוטים נאיביים] ──> [שלב 3: מנוע גאומטריה ועקמומיות]<br>
+                                                                  │<br>
+[שלב 7: דמו חי ודוח PDF] &lt;── [שלב 6: שבירת ה-100%] &lt;── [שלב 5: ביומכניקה ובוט מתחזה]
+</div>
+
+<!-- STAGE 1 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 1</span>נקודת ההתחלה – איסוף תנועות אנושיות בסיסיות</div>
+  <div class="action-box">
+    <strong>מה עשינו בפועל:</strong>
+    בנינו ממשק איסוף גרפי מבוסס Tkinter (<code>mouse_tracker.py</code>). על משטח הציור בגודל $900 \\times 600$ פיקסלים, המערכת מגרילה בכל ניסיון מעגל התחלה ירוק ומעגל יעד אדום. המשתמש לוחץ על הירוק, מזיז את העכבר ליעד, והמערכת דוגמת קואורדינטות וזמנים $\\mathcal{T} = \\{(x_i, y_i, t_i)\\}_{i=1}^N$ ונשמרת כקובץ CSV ב-<code>data/session_01/</code>.
+  </div>
+  <div class="rationale-box">
+    <strong>ההיגיון והמניע המדעי:</strong>
+    הצעד הראשון בכל מחקר ביומטרי מבוסס למידת מכונה הוא יצירת נתוני אמת של משתמשים אנושיים (Ground Truth Data). היה צורך להקליט תנועות יד טבעיות מגוונות (בכיוונים, מרחקים וזוויות שונות) כדי להבין את מאפייני התנועה האנושית הבסיסית.
+  </div>
+  <div class="challenge-box">
+    <strong>הבעיה והמגבלה שעלתה מיד:</strong>
+    במאגר הנתונים היו אך ורק מסלולים של בני אדם. <em>לא ניתן לבנות או לבחון מסווג בינארי ללא דוגמאות של הצד השני (בוטים)</em>. אם אין בוטים סינתטיים להשוואה, אין שום דרך מדעית לבדוק האם גדלים גאומטריים מסוגלים להבדיל בין אדם למחשב.
+  </div>
+</div>
+
+<!-- STAGE 2 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 2</span>כניסת מחוללי הבוטים הנאיביים (linear, curved, noisy)</div>
+  <div class="action-box">
+    <strong>מה עשינו בפועל:</strong>
+    הוספנו ישירות ל-GUI כפתורים המאפשרים למחשב לבצע תנועה אוטומטית בין המעגלים:
+    <ul>
+      <li><code>bot_linear</code>: תנועה בקו ישר בדיוק בין המרכזים במהירות קבועה לחלוטין ($u = \\tau$).</li>
+      <li><code>bot_curved</code>: תנועה לאורך קשת בזייה ריבועית (Quadratic Bézier) עם נקודת בקרה בניצב למיתר במהירות אחידה.</li>
+      <li><code>bot_noisy</code>: תנועה בקו ישר עם תוספת רעש צידי רציף (אינטרפולציית הרמיט מסוג Smoothstep: $3\\tau^2 - 2\\tau^3$) ומעטפת דעיכה בנקודות הקצה.</li>
+    </ul>
+  </div>
+  <div class="rationale-box">
+    <strong>ההיגיון והמניע המדעי:</strong>
+    יצירת קבוצת ביקורת בסיסית (Baseline) שתאפשר לבחון מדדים גאומטריים פשוטים: יחס אורך המסלול למרחק הישיר ($\\text{Path Ratio} = L / \\text{direct}$) וסטיית מיתר מקסימלית (<code>max_chord_dev_px</code>).
+  </div>
+  <div class="challenge-box">
+    <strong>הממצא והמגבלה שחשפנו:</strong>
+    הבוטים הנאיביים נעים כולם במהירות קבועה לחלוטין (יחס שיא המהירות לממוצע $\\approx 1.0$). אמנם קל מאוד לזהות אותם, אך <em>בעולם האמיתי תוקף מתוחכם לא ישתמש בבוט שנע במהירות קבועה ובמסלול פשטני</em>. היה ברור שעלינו לבנות מנוע ניתוח גאומטרי מעמיק הנשען על גאומטריה דיפרנציאלית וקינמטיקה אמיתית.
+  </div>
+</div>
+
+<div class="page-break"></div>
+
+<!-- STAGE 3 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 3</span>פיתוח מנוע הגאומטריה הדיפרנציאלית (analyze_trajectories.py)</div>
+  <div class="action-box">
+    <strong>מה עשינו בפועל:</strong>
+    בנינו מנוע אנליטי שמחלץ את הצורה הגאומטרית הטהורה של המסלול במנותק מהזמן:
+    <ol>
+      <li><strong>פרמטריזציה לפי אורך קשת (Arc-Length Resampling):</strong> חישוב אורך הקשת המצטבר $s_k$ ודגימה מחדש ל-100 נקודות במרווח מרחבי אחיד $ds = L / 99$ כדי שוקטור המשיק יקיים $\\|\\gamma'(s)\\| = 1$.</li>
+      <li><strong>פתרון לבעיית הרעש בגזירה בדידה (Cubic Savitzky-Golay):</strong> גזירה בדידה של הפרשים סופיים על רשת פיקסלים שלמים ($\\mathbb{Z}^2$) הגבירה את רעש הדיגיטציה ביחס הפוך ל-$ds^2$. הפתרון: התאמת פולינום מעלה 3 בחלון נע של 7 נקודות באמצעות ריבועים פחותים, וגזירה אנליטית במרכז החלון לקבלת עקמומיות חלקה מדרגה $C^2$:
+        $$\\kappa = \\frac{2 |a_1 b_2 - b_1 a_2|}{(a_1^2 + b_1^2)^{3/2}}$$
+      </li>
+      <li><strong>מנגנון מסכות מקומיות (Local Exclusion Masks):</strong> החרגת שולי קצוות ($span / 2$), החרגת מרווחים דלילים הנובעים מדילוגי חומרה (<code>segment_lengths > span</code>), והחרגת היפוכי כיוון חדים ($180^\\circ$) למניעת עקמומיות אינסופית בנקודות חורפה (Cusps).</li>
+    </ol>
+  </div>
+  <div class="rationale-box">
+    <strong>ההיגיון המדעי:</strong>
+    יישום ישיר ומדויק של החומר הנלמד בקורס: מסגרת פרנה-סרה, אינווריאנטיות לטרנספורמציות קשיחות (סיבוב והזזה), ואפיון עקומות מישוריות בדידות.
+  </div>
+</div>
+
+<!-- STAGE 4 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 4</span>כניסת הביומכניקה – מודל Minimum Jerk וחוק שני-השלישים</div>
+  <div class="action-box">
+    <strong>מה עשינו בפועל:</strong>
+    <ul>
+      <li><strong>בוט Min-Jerk (<code>bot_smart_jerk</code>):</strong> יישום פתרון משוואת אוילר-לגראנז' של מודל Minimum Jerk (Flash & Hogan, 1985) – פולינום מעלה 5:
+        $$u(\\tau) = 10\\tau^3 - 15\\tau^4 + 6\\tau^5, \\quad \\tau = \\frac{t}{T}$$
+        הפולינום יצר פרופיל מהירות פעמוני חלק ומדויק (האצה ובלימה הדרגתית).
+      </li>
+      <li><strong>בוט ביומכני (<code>bot_smart_full</code>):</strong> שילוב של פרופיל א-סימטרי המגיע לשיא מוקדם באמצעות חזקה $\\tau^{0.8}$, הארכת שלב הבלימה האופיינית ליד אנושית, ורעד נוירו-מוטורי פיזיולוגי בשני תדרים אמיתיים ($10\\text{Hz}$ ו-$18\\text{Hz}$).</li>
+      <li><strong>אמידת חוק שני-השלישים (Two-Thirds Power Law):</strong> חילוץ מעריך החוק $\\beta$ במשוואת הרגרסיה $\\ln v = C - \\beta \\ln \\kappa$, וחישוב מקדם ההשתנות של המהירות האפינית: $v_{aff} = \\kappa^{1/3} v$.</li>
+    </ul>
+  </div>
+  <div class="rationale-box">
+    <strong>ההיגיון והממצא המדעי:</strong>
+    הוכחנו אמפירית כי אצל בני אדם קיים צימוד הדוק בין עקמומיות למהירות ($\\beta \\approx 0.39$, קרוב מאוד לערך התיאורטי $1/3$), בעוד אצל כל הבוטים (כולל בוט ה-Min Jerk) המעריך היה קרוב לאפס ($\\beta \\approx 0.0$). המודל למד להפריד בין הבוטים החכמים לבני אדם בזכות העובדה שהבוטים לא צימדו בין העקמומיות למהירות.
+  </div>
+</div>
+
+<div class="page-break"></div>
+
+<!-- STAGE 5 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 5</span>התפנית – "הבוט לא מספיק חזק, אני עדיין מצליחה לרמות את המודל!"</div>
+  <div class="challenge-box">
+    <strong>האתגר שעלה מהשטח:</strong>
+    במהלך ניסויים חיים שביצעה המשתמשת עם הממשק, עלתה הבחנה קריטית: <em>תנועות אנושיות מסוימות – בפרט תנועות "הצלפה" מהירות ועקומות (Flicks) – הצליחו לבלבל את המודל או להיות מסווגות בטעות כבוטים</em>. בנוסף, הבנו שבוט מתקדם שיידע לחקות גם את חוק ה-2/3 עלול להערים על המערכת.
+  </div>
+  <div class="action-box">
+    <strong>ההיגיון והפתרונות ההנדסיים שפיתחנו:</strong>
+    <ol>
+      <li><strong>פיתוח בוט מתחזה אדברסריאלי (<code>bot_adversarial</code>):</strong> בוט יריב מתוחכם הדוגם עקומת בזייה ומצמד באופן מפורש בין העקמומיות המקומית למהירות המשיקית לפי חוק ה-2/3 ($v(s) \\propto \\kappa(s)^{-1/3}$), תוך שמירה על מעטפת פעמון חלקה.</li>
+      <li><strong>חילוץ מדדי גאומטריה מרחבית טהורה:</strong>
+        <ul>
+          <li><code>bezier_residual_px</code> (שארית עקומת בזייה ריבועית): פיתחנו נוסחה אנליטית בריבועים פחותים למציאת נקודת הבקרה הניצבת האופטימלית $P_1^*$. השארית האוקלידית הממוצעת מעקומת הבזייה היא מזערית בבוטים סינתטיים הנעים על נוסחה ($0-3\\text{px}$), וגבוהה משמעותית באדם ($8-25\\text{px}$) עקב תנועת מפרקי היד (כתף, מרפק, שורש כף היד).</li>
+          <li><code>time_to_peak_ratio</code> (תזמון שיא המהירות): אדם מגיע לשיא המהירות מוקדם (ב-25% עד 45% ממשך התנועה), בעוד בוטים סימטריים מגיעים בדיוק ב-50%.</li>
+        </ul>
+      </li>
+      <li><strong>שדרוג חישוב ה-Jerk ל-<code>CubicSpline</code> רציף:</strong> גזירה בדידה בתנועות אנושיות מהירות ($0.2\\text{s}$) גרמה להתאפסות מלאכותית של הנגזרת השלישית. המעבר לספליין קובי פתר את הבעיה ושמר על ג'רק פיזיקלי רציף.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- STAGE 6 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 6</span>התובנה המדעית הביקורתית – "הדיוקים שלך יותר מדי אידאליים (100%)"</div>
+  <div class="challenge-box">
+    <strong>הביקורת המדעית:</strong>
+    המשתמשת הבחינה בצדק שדיוק של 100% בסיווג בינארי ו-99.2% בסיווג רב-מחלקתי הוא "אידאלי מדי" ומעורר חשד לזליגת מידע או לפיצ'ר שמבצע הפרדה מלאכותית.
+  </div>
+  <div class="rationale-box">
+    <strong>החקירה הסטטיסטית שערכנו:</strong>
+    ניתחנו את התפלגויות כל 11 התכונות ומצאנו את הגורם: <code>log_dimensionless_jerk</code> יצר פער עצום ומלאכותי (בוטים: $\\le 10.08$, בני אדם: $\\ge 11.65$). הסיבה: <em>ביד אנושית קיים רעד שרירי טבעי (Physiological Tremor ב-8-12Hz) ואי-סדירות דגימת USB במערכת ההפעלה</em>. כשגוזרים בדידה 3 פעמים ומחלקים ב-$(\\Delta t)^3$, הרעד הזה מקפיץ את אינטגרל הג'רק לסדרי גודל עצומים ($10^{12}-10^{16}$). לעומת זאת, בוטים מיוצרים מנוסחאות מתמטיות חלקות. עץ ההחלטה פשוט למד את החוק הקל הזה.
+  </div>
+  <div class="action-box">
+    <strong>הפתרון המדעי – חלוקה ל-3 בנצ'מרקים מחמירים ב-<code>classify_trajectories.py</code>:</strong>
+    <ul>
+      <li><strong>Benchmark A (מודל מלא עם Jerk):</strong> דיוק 100% – מדגים את כוחו של הרעד הפיזיולוגי.</li>
+      <li><strong>Benchmark B (מודל גיאומטרי טהור ללא Jerk):</strong> דיוק ריאליסטי של <strong>$94.7\\%$ בעץ החלטה</strong> ו-<strong>$98.5\\%$ ביער אקראי</strong> – נשען על שארית בזייה, יחס שיא לממוצע ומהירות אפינית.</li>
+      <li><strong>Benchmark C (הכללה בין סשנים – Leave-One-Session-Out):</strong> בדיקה על סשנים חדשים לחלוטין ($94.0\\%$ ממוצע). בסשן 12 הדיוק צנח ל-<strong>$50.0\\%$</strong>. הניתוח האיכותני חשף: תנועות אנושיות מהירות וישרות (Flicks) מתנהגות גיאומטרית ממש כמו בוט מעוקל סינתטי.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- STAGE 7 -->
+<div class="stage-card">
+  <div class="stage-title"><span class="stage-badge">שלב 7</span>סגירת המעגל – הדמו החי, בדיקות היחידה והדוח האקדמי</div>
+  <div class="action-box">
+    <strong>מה עשינו בפועל:</strong>
+    <ul>
+      <li><strong>מערכת הדגמה אינטראקטיבית בזמן אמת (<code>live_demo.py</code>):</strong> ארכיטקטורת In-Memory הפועלת ללא כתיבה לקבצים בדיסק. חישוב כל 11 התכונות בתוך פחות מ-2 מילישניות וסיווג מיידי עם כרטיס החלטה והסתברויות מכוילות.</li>
+      <li><strong>חבילת בדיקות יחידה מקיפה:</strong> 27 בדיקות <code>unittest</code> המאמתות גיאומטריה, תקינות בוטים וסיווג ב-100% הצלחה.</li>
+      <li><strong>דוח מחקר מלא כקובץ PDF:</strong> קימפול מסמך אקדמי בן 13 עמודים (<code>PROJECT_COMPLETE_REPORT_HE.pdf</code>) הכולל את כל ההוכחות המתמטיות, הנוסחאות, הטבלאות והגרפים.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- DEFENSE PITCH BOX -->
+<div class="defense-pitch">
+  <h3>🎯 תמצית המסר להגנה האקדמית על הפרויקט (Defense Pitch)</h3>
+  <p>
+  "הפרויקט שלנו לא קפץ לפתרון קסם שחור. התחלנו ממעקב פשוט ובוטים נאיביים. כשהבנו שגזירה בדידה נכשלת עקב קוונטיזציית פיקסלים, פיתחנו התאמת פולינום מעלה 3 בחלון נע מתוך הגאומטריה הדיפרנציאלית. כשראינו שהבוטים נאיביים מדי, יישמנו מודל Minimum Jerk ואת חוק שני-השלישים האפיני.  
+  כשהצלחנו לרמות את המודל בתנועות מהירות, בנינו בוט אדברסריאלי והוספנו שארית עקומת בזייה.  
+  והכי חשוב – כשקיבלנו 100% דיוק, לא הסתנוורנו: פירקנו את הנתונים, גילינו שרעד החומרה והג'רק יוצרים הפרדה מלאכותית, והוכחנו שהמודל עובד בצורה חזקה ומרשימה (מעל 94%) גם על גאומטריה מרחבית טהורה ועל משתמשים חדשים לחלוטין!"
+  </p>
+</div>
+
+</body>
+</html>
+"""
+    return html
+
+
+def main():
+    print("Building Project Evolution HTML...")
+    html_content = build_html()
+    HTML_FILE.write_text(html_content, encoding="utf-8")
+    print(f"  Saved HTML: {HTML_FILE}")
+
+    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if not os.path.exists(chrome_path):
+        print(f"Error: Chrome not found at {chrome_path}")
+        return
+
+    print("Compiling to PDF via headless Google Chrome...")
+    cmd = [
+        chrome_path,
+        "--headless",
+        "--disable-gpu",
+        "--no-pdf-header-footer",
+        "--virtual-time-budget=5000",
+        f"--print-to-pdf={OUTPUT_PDF}",
+        str(HTML_FILE.resolve()),
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        if OUTPUT_PDF.exists() and OUTPUT_PDF.stat().st_size > 1000:
+            print(f"SUCCESS: Generated PDF at {OUTPUT_PDF} ({OUTPUT_PDF.stat().st_size / 1024:.1f} KB)")
+            ROOT_PDF.write_bytes(OUTPUT_PDF.read_bytes())
+            print(f"Copied PDF to root at {ROOT_PDF}")
+        else:
+            print("Warning: PDF was not generated or empty.")
+    except Exception as e:
+        print(f"Error executing Chrome: {e}")
+
+
+if __name__ == "__main__":
+    main()
