@@ -1,8 +1,8 @@
 """
 test_live_demo.py
 
-בדיקות יחידה למודול הסיווג המקומי וחילוץ המדדים בזיכרון של live_demo.py.
-מוודא שזיהוי התנועות והמדדים הקינמטיים עובדים בצורה מדויקת וללא חריגות בזמן אמת.
+Unit tests for in-memory feature extraction and local classification modules in live_demo.py.
+Verifies that geometric metrics, kinematics, and decision trees operate reliably in real-time.
 """
 
 import math
@@ -15,12 +15,12 @@ from live_demo import TrajectoryClassifier, extract_live_metrics, BASE_DIR, SUMM
 
 class TestLiveDemoComponents(unittest.TestCase):
     def setUp(self):
-        # מסלול ישר סינתטי
+        # Synthetic straight line trajectory
         self.straight_traj = [
             {"x": float(i), "y": 100.0, "time": i * 0.01}
             for i in range(50)
         ]
-        # מסלול קשתי סינתטי
+        # Synthetic circular arc trajectory
         self.arc_traj = [
             {
                 "x": 200.0 + 100.0 * math.cos(t),
@@ -38,7 +38,7 @@ class TestLiveDemoComponents(unittest.TestCase):
         self.assertIn("power_law_beta", metrics)
         self.assertIn("power_law_r", metrics)
 
-        # מסלול ישר לחלוטין צריך סטיית מיתר אפסית
+        # An ideal straight line should have near-zero chord deviation and path ratio == 1.0
         self.assertLess(metrics["max_chord_dev_px"], 1e-3)
         self.assertAlmostEqual(metrics["path_ratio"], 1.0, places=2)
 
@@ -59,7 +59,7 @@ class TestLiveDemoComponents(unittest.TestCase):
         if SUMMARY_CSV.exists():
             self.assertTrue(classifier.is_trained)
             
-            # בדיקת חיזוי על מסלול
+            # Predict on test trajectory
             metrics = extract_live_metrics(self.arc_traj)
             bin_pred, multi_pred = classifier.predict(metrics)
             self.assertIn(bin_pred, ["human", "bot"])
@@ -67,11 +67,11 @@ class TestLiveDemoComponents(unittest.TestCase):
             self.assertGreater(len(multi_pred), 0)
 
     def test_classifier_fallback_heuristic(self):
-        # מודל שלא אומן (נתיב לא קיים)
+        # Untrained model fallback (non-existent path)
         dummy_classifier = TrajectoryClassifier(Path("/nonexistent/file.csv"))
         self.assertFalse(dummy_classifier.is_trained)
 
-        # בדיקת היוריסטיקה
+        # Verify fallback heuristic logic
         bin_pred, multi_pred = dummy_classifier.predict({"peak_to_mean_speed": 2.5, "power_law_beta": 0.4})
         self.assertEqual(bin_pred, "human")
 

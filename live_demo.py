@@ -1,15 +1,15 @@
 """
 live_demo.py
 
-מערכת הדגמה אינטראקטיבית בזמן אמת לזיהוי בוטים לפי תנועת העכבר.
-מיועד להצגה, הגנה ומצגת מול מרצה וכיתה (Live Presentation Demo).
+Interactive real-time demonstration system for mouse movement bot detection.
+Designed for live presentations, thesis defenses, and classroom demonstrations.
 
-מבצע סיווג מיידי ומציג כרטיס חיווי עשיר:
-- סיווג בינארי (אדם מול בוט) וזיהוי סוג התנועה הספציפי.
-- הצגת המדדים הגאומטריים והקינמטיים המרכזיים שהובילו להחלטה:
-  * יחס שיא מהירות לממוצע (פרופיל פעמוני מול קבוע)
-  * חוק שני-השלישים (מעריך beta וקורלציה)
-  * סטייה מקסימלית מהמיתר (ישרות המסלול)
+Performs immediate classification upon target arrival and displays a rich decision card:
+- Binary classification (Human vs. Bot) and specific trajectory sub-class identification.
+- Key geometric and kinematic metrics driving the decision:
+  * Peak-to-mean speed ratio (bell-shaped vs. constant velocity profile)
+  * Two-Thirds Power Law (beta exponent and correlation)
+  * Maximum chord deviation (straightness of trajectory)
 """
 
 import math
@@ -29,7 +29,7 @@ SUMMARY_CSV = BASE_DIR / "geometry_summary.csv"
 
 
 # =============================================================================
-# מודול למידת מכונה וסיווג מקומי (In-Memory Classifier)
+# In-Memory Machine Learning Classifier Module
 # =============================================================================
 class TrajectoryClassifier:
     def __init__(self, summary_path=SUMMARY_CSV):
@@ -86,7 +86,7 @@ class TrajectoryClassifier:
 
 
 # =============================================================================
-# מודול חילוץ מדדים גאומטריים וקינמטיים מהזיכרון בזמן אמת
+# In-Memory Real-Time Geometric and Kinematic Metric Extraction
 # =============================================================================
 def extract_live_metrics(trajectory, num_points=100, window=7):
     """Compute geometric and kinematic features directly from in-memory trajectory."""
@@ -213,7 +213,7 @@ def extract_live_metrics(trajectory, num_points=100, window=7):
 
 
 # =============================================================================
-# אפליקציית GUI מלאה להדגמה חיה (Live Demo Application)
+# Live Demo GUI Application
 # =============================================================================
 class LiveDemoApp:
     def __init__(self, root):
@@ -290,10 +290,10 @@ class LiveDemoApp:
         self.canvas.bind("<B1-Motion>", self.on_mouse_motion)
         self.canvas.bind("<Leave>", self.on_leave)
 
-        # 3. Live Decision Card (כרטיס תוצאה מודגש - מקובע מתחת לקנבס בגובה קבוע שלא מזיז שום אלמנט)
+        # 3. Live Decision Card (fixed height container below canvas to prevent coordinate shifts)
         self.card_frame = tk.Frame(self.root, bg="#eceff1", bd=2, relief=tk.SOLID, padx=15, pady=6, height=90)
         self.card_frame.pack(fill=tk.X, padx=15, pady=4)
-        self.card_frame.pack_propagate(False)  # מונע כל שינוי גודל או תזוזת פיקסלים בממשק
+        self.card_frame.pack_propagate(False)  # Locks dimensions to prevent any canvas shift
 
         self.card_verdict = tk.Label(
             self.card_frame,
@@ -342,7 +342,7 @@ class LiveDemoApp:
         self.btn_cancel.pack(side=tk.RIGHT, padx=4)
 
     # =========================================================================
-    # גאומטריה של המטרות
+    # Target Geometry and Layout
     # =========================================================================
     def randomize_targets(self):
         if self.recording:
@@ -388,7 +388,7 @@ class LiveDemoApp:
         return self.inside_circle(x1 + t * dx, y1 + t * dy, cx, cy, r)
 
     # =========================================================================
-    # תנועת משתמש אנושי
+    # Human User Interaction
     # =========================================================================
     def on_start_click(self, event):
         if self.recording:
@@ -408,7 +408,7 @@ class LiveDemoApp:
             self.cancel_trial(reason="הסמן יצא מגבולות המשטח")
 
     # =========================================================================
-    # הפעלת בוטים
+    # Bot Trajectory Generation & Execution
     # =========================================================================
     def make_bot_plan(self, source_type, seed):
         rng = random.Random(seed)
@@ -505,7 +505,7 @@ class LiveDemoApp:
             self.sampling_job = self.root.after(5, self.bot_step)
 
     # =========================================================================
-    # רישום וניהול תנועה
+    # Recording and Motion Management
     # =========================================================================
     def begin_movement(self, source_type, start_x, start_y):
         self.recording = True
@@ -562,7 +562,7 @@ class LiveDemoApp:
         self.card_details.config(text="לחצו על העיגול הירוק או בחרו בוט לניסיון חדש", bg="#fbe9e7")
 
     # =========================================================================
-    # סיום תנועה וסיווג חי
+    # Trial Completion and Live Classification
     # =========================================================================
     def finish_movement(self):
         self.recording = False
@@ -574,13 +574,13 @@ class LiveDemoApp:
             b.config(state=tk.NORMAL)
         self.btn_cancel.config(state=tk.DISABLED)
 
-        # 1. חילוץ מדדים מהיר
+        # 1. Fast in-memory metric extraction
         metrics = extract_live_metrics(self.trajectory)
 
-        # 2. סיווג בעץ ההחלטה
+        # 2. Decision tree classification
         pred_bin, pred_multi = self.classifier.predict(metrics)
 
-        # 3. עדכון כרטיס תוצאה חי
+        # 3. Update live decision card
         self.display_live_verdict(pred_bin, pred_multi, metrics)
 
     def display_live_verdict(self, pred_bin, pred_multi, m):
