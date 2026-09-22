@@ -39,9 +39,12 @@ def numeric_column(df, name):
 def constant_value(df, name, fallback):
     if name not in df:
         return fallback
-    if df[name].isna().any() or df[name].nunique() != 1:
+    valid = df[name].dropna()
+    if len(valid) == 0:
+        return fallback
+    if valid.nunique() != 1:
         raise ValueError(f"Column {name} must contain one consistent value per file")
-    return str(df[name].iloc[0])
+    return str(valid.iloc[0])
 
 
 def estimate_curvature(points, segment_lengths, count, window):
@@ -99,7 +102,7 @@ def local_curvature_profile(points, segment_lengths, count=100, window=7):
     exclude(0, radius, "endpoint")
     exclude(length - radius, length, "endpoint")
     allowed = np.isfinite(curvature)
-    gaps = np.flatnonzero(segment_lengths > span)
+    gaps = np.flatnonzero(segment_lengths > max(80.0, 2.5 * span))
     for i in gaps:
         # Mask every fit whose full window touches the unobserved source interval.
         left, right = cumulative[i] - radius, cumulative[i + 1] + radius
@@ -109,9 +112,8 @@ def local_curvature_profile(points, segment_lengths, count=100, window=7):
     vectors = np.diff(points, axis=0)
     angles = np.arctan2(vectors[:, 1], vectors[:, 0])
     change = np.diff(angles)
-    reversal_ids = np.flatnonzero(
-        np.abs(np.arctan2(np.sin(change), np.cos(change))) >= np.pi - 1e-6
-    ) + 1
+    wrapped = np.arctan2(np.sin(change), np.cos(change))
+    reversal_ids = np.flatnonzero(np.abs(wrapped) >= np.pi - 1e-6) + 1
     for i in reversal_ids:
         left, right = cumulative[i] - radius, cumulative[i] + radius
         allowed &= ~((centers >= left) & (centers <= right))
@@ -129,8 +131,8 @@ def local_curvature_profile(points, segment_lengths, count=100, window=7):
         "span_px": span, "coverage_pct": 100 * covered_length / length,
         "reversal_count": len(reversal_ids), "sparse_gap_count": len(gaps),
         "excluded_ranges": excluded,
+        "total_angle_change": float(np.abs(wrapped).sum()) if len(wrapped) else 0.0,
     }
-
 
 def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_window=7):
     """Return metrics or an explicit invalid row; never silently omit a bad file."""
@@ -159,8 +161,8 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         # Earlier recordings in this project predate bots and are human trials.
         # Keep provenance as labels, not as movement features for a classifier.
         result["source_type"] = constant_value(df, "source_type", "human")
-        if result["source_type"] not in ("human", "bot_linear", "bot_curved", "bot_noisy"):
-            raise ValueError("Unrecognized source_type")
+        if result["source_type"] not in ("human", "bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full"):
+                    raise ValueError("Unrecognized source_type")
         for key in ("bot_seed", "planned_duration_s", "control_x", "control_y",
                     "noise_amplitude_px", "generator_version"):
             result[key] = (constant_value(df, key, "")
@@ -172,7 +174,7 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         points = np.column_stack([numeric_column(df, "x"), numeric_column(df, "y")])
         raw_steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
         clean = points[np.r_[True, raw_steps > 0]]
-        segments = np.linalg.norm(np.diff(clean, axis=0), axis=1)
+        segments = raw_steps[raw_steps > 0]
         length = float(np.sum(segments))
         direct = float(np.linalg.norm(points[-1] - points[0]))
         result.update(sample_count=len(df), moving_position_count=len(clean),
@@ -180,7 +182,15 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
                       path_ratio=length / direct if direct > 0 else np.nan)
         if direct == 0:
             notes.append("path_ratio undefined: start and end coordinates coincide")
-
+                # Maximum perpendicular deviation from the straight chord (straightness metric)
+        chord_vec = clean[-1] - clean[0]
+        chord_len = np.linalg.norm(chord_vec)
+        if chord_len > 1e-6:
+            diff_start = clean - clean[0]
+            cross = np.abs(diff_start[:, 0] * chord_vec[1] - diff_start[:, 1] * chord_vec[0])
+            result["max_chord_dev_px"] = float(np.max(cross / chord_len))
+        else:
+            result["max_chord_dev_px"] = 0.0
         # Timing uses every original sample, including pauses, with actual intervals.
         if "time" in df:
             try:
@@ -194,6 +204,17 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
                               stationary_interval_s=float(dt[raw_steps == 0].sum()),
                               median_sample_interval_ms=float(np.median(dt) * 1000),
                               max_sample_interval_ms=float(np.max(dt) * 1000))
+                            # Velocity profile: ratio of peak speed to mean speed across time slices
+                unique_times = np.r_[True, dt > 1e-4]
+                if duration > 0 and np.sum(unique_times) >= 5:
+                    time_grid = np.linspace(0, duration, 21)
+                    grid_x = np.interp(time_grid, times[unique_times] - times[0], points[unique_times, 0])
+                    grid_y = np.interp(time_grid, times[unique_times] - times[0], points[unique_times, 1])
+                    slice_speeds = np.hypot(np.diff(grid_x), np.diff(grid_y)) / (duration / 20.0)
+                    v_mean = np.mean(slice_speeds)
+                    result["peak_to_mean_speed"] = float(np.max(slice_speeds) / v_mean) if v_mean > 0 else 1.0
+                else:
+                    result["peak_to_mean_speed"] = 1.0    
             except ValueError as error:
                 result["timing_status"] = "invalid"
                 notes.append(str(error))
@@ -211,13 +232,13 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
             result["target_center_distance"] = float(np.hypot(tx - sx, ty - sy))
 
         # Wrapped angle differences avoid artificial jumps at -pi/pi.
-        # This is a raw polyline metric: pixel noise and source density affect it.
-        if len(segments):
-            vectors = np.diff(clean, axis=0)
-            angles = np.arctan2(vectors[:, 1], vectors[:, 0])
-            changes = np.diff(angles)
-            wrapped = np.arctan2(np.sin(changes), np.cos(changes))
-            result["total_angle_change"] = float(np.abs(wrapped).sum())
+         # Total angle change fallback for short paths with fewer than 7 points
+        if len(clean) >= 2:
+            v_short = np.diff(clean, axis=0)
+            a_short = np.arctan2(v_short[:, 1], v_short[:, 0])
+            c_short = np.diff(a_short)
+            w_short = np.arctan2(np.sin(c_short), np.cos(c_short))
+            result["total_angle_change"] = float(np.abs(w_short).sum())
         else:
             result["total_angle_change"] = np.nan
 
@@ -230,7 +251,8 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         else:
             profile = local_curvature_profile(clean, segments, num_resample_points, smoothing_window)
             used = profile["used"]
-            result.update(smoothing_span_px=float(profile["span_px"]),
+            result.update(total_angle_change=profile["total_angle_change"],
+                          smoothing_span_px=float(profile["span_px"]),
                           curvature_coverage_pct=profile["coverage_pct"],
                           curvature_used_points=int(used.sum()),
                           curvature_total_points=len(used),
@@ -248,7 +270,8 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
                 result.update(curvature_status="estimated" if used.all() else "partial_estimate",
                               mean_curvature=float(values.mean()),
                               max_curvature=float(values.max()),
-                              p95_curvature=float(np.percentile(values, 95)))
+                              p95_curvature=float(np.percentile(values, 95)),
+                              curvature_std=float(values.std()))                
                 if not used.all():
                     notes.append(f"Curvature describes retained portions only ({profile['coverage_pct']:.1f}% of path length)")
             else:

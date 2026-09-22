@@ -57,8 +57,8 @@ active_source = "human"
 bot_plan = None
 BOT_DURATION_S = 1.0  # Common baseline for all three bots, not a measured human duration.
 SOURCE_COLORS = {"human": "blue", "bot_linear": "purple",
-                 "bot_curved": "orange", "bot_noisy": "teal"}
-
+                 "bot_curved": "orange", "bot_noisy": "teal",
+                 "bot_smart_jerk": "magenta", "bot_smart_full": "brown"}
 
 # Create the data directory next to this script
 DATA_DIRECTORY = Path(__file__).resolve().parent / "data"
@@ -163,10 +163,26 @@ def inside_circle(x, y, center_x, center_y, circle_radius):
     distance_squared = (x - center_x) ** 2 + (y - center_y) ** 2
     return distance_squared <= circle_radius ** 2
 
+# Check if the line segment between (x1, y1) and (x2, y2) intersects the circle.
+def segment_intersects_circle(x1, y1, x2, y2, center_x, center_y, circle_radius):
+    dx = x2 - x1
+    dy = y2 - y1
+    segment_len_sq = dx ** 2 + dy ** 2
+    if segment_len_sq == 0:
+        return inside_circle(x1, y1, center_x, center_y, circle_radius)
+
+    # Project circle center onto the segment: t is the normalized parameter in [0, 1]
+    t = ((center_x - x1) * dx + (center_y - y1) * dy) / segment_len_sq
+    t_clamped = max(0.0, min(1.0, t))
+    closest_x = x1 + t_clamped * dx
+    closest_y = y1 + t_clamped * dy
+
+    return inside_circle(closest_x, closest_y, center_x, center_y, circle_radius)
+
 
 # Construct a reproducible geometric plan without touching recording state or files.
 def make_bot_plan(source_type, center, target, width, height, seed):
-    if source_type not in ("bot_linear", "bot_curved", "bot_noisy"):
+    if source_type not in ("bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full"):
         raise ValueError("Unknown bot type")
     rng = random.Random(seed)
     # Start inside the green circle, rather than always at its exact center.
@@ -184,39 +200,70 @@ def make_bot_plan(source_type, center, target, width, height, seed):
             "normal": normal, "duration": BOT_DURATION_S, "seed": seed,
             "control": None, "noise_amplitude": 0.0, "noise_knots": [],
             "generator_version": "bots_v1"}
-    if source_type == "bot_curved":
-        # Offset the control point perpendicular to the path in ANY orientation.
-        # The control point stays inside the canvas; the Bezier convex hull then
-        # keeps the entire curve inside it as well, without clipping its shape.
-        sign = rng.choice((-1, 1))
-        direction = (sign * normal[0], sign * normal[1])
-        limits = []
-        for coordinate, component, upper in zip(midpoint, direction, (width - 6, height - 6)):
-            if component > 1e-12:
-                limits.append((upper - coordinate) / component)
-            elif component < -1e-12:
-                limits.append((5 - coordinate) / component)
-        amplitude = min(distance * rng.uniform(0.2, 0.45), min(limits) * 0.9)
-        if amplitude <= 0:
-            raise ValueError("No room for a curved trajectory")
-        plan["control"] = tuple(midpoint[i] + amplitude * direction[i] for i in (0, 1))
+    if source_type in ("bot_curved", "bot_smart_jerk", "bot_smart_full"):
+        # Check available space in both perpendicular directions (+1 and -1)
+        valid_options = []
+        for sign in (-1, 1):
+            direction = (sign * normal[0], sign * normal[1])
+            limits = []
+            for coordinate, component, upper in zip(midpoint, direction, (width - 6, height - 6)):
+                if component > 1e-12:
+                    limits.append((upper - coordinate) / component)
+                elif component < -1e-12:
+                    limits.append((5 - coordinate) / component)
+            max_limit = min(limits) if limits else 0.0
+            if max_limit > 5.0:  # At least 5 pixels of clearance
+                valid_options.append((sign, direction, max_limit))
+
+        if valid_options:
+            sign, direction, max_limit = rng.choice(valid_options)
+            curve_range = (0.15, 0.35) if source_type == "bot_smart_full" else (0.2, 0.45)
+            amplitude = min(distance * rng.uniform(*curve_range), max_limit * 0.9)
+            plan["control"] = tuple(midpoint[i] + amplitude * direction[i] for i in (0, 1))
+        else:
+            plan["control"] = midpoint
+
+        if source_type == "bot_smart_full":
+            plan["tremor_phases"] = (rng.uniform(0, 2 * math.pi), rng.uniform(0, 2 * math.pi))
     elif source_type == "bot_noisy":
         # Correlated lateral disturbances create departures and gradual corrections.
-        # Bound offsets using the minimum endpoint clearance; the baseline lies
-        # in their convex hull, so no clipping or off-canvas noise is needed.
         clearance = min(start[0], target[0], start[1], target[1],
                         width - 1 - start[0], width - 1 - target[0],
                         height - 1 - start[1], height - 1 - target[1])
         amplitude = min(12.0, distance * 0.025, clearance * 0.5)
         plan["noise_amplitude"] = amplitude
         plan["noise_knots"] = [0.0] + [rng.uniform(-amplitude, amplitude) for _ in range(7)] + [0.0]
+
     return plan
 
 
 # Evaluate the same plan at any elapsed time; scheduling never changes its shape.
 def bot_position(plan, elapsed):
-    u = min(1.0, max(0.0, elapsed / plan["duration"]))
+    tau = min(1.0, max(0.0, elapsed / plan["duration"]))
     start, target = plan["start"], plan["target"]
+
+    # 1. בוט Minimum Jerk: פולינום מעלה 5 (האצה ובלימה חלקה)
+    if plan["source_type"] == "bot_smart_jerk":
+        u = 10 * (tau**3) - 15 * (tau**4) + 6 * (tau**5)
+        control = plan["control"]
+        return tuple((1-u)**2 * start[i] + 2*(1-u)*u*control[i] + u*u*target[i] for i in (0, 1))
+
+    # 2. בוט ביומכני: פרופיל מהירות א-סימטרי + רעידות נוירו-מוטוריות (10Hz)
+    if plan["source_type"] == "bot_smart_full":
+        tau_w = tau ** 0.8  # שיא מהירות מוקדם (ב-35-40% מהמסלול, כמו יד אנושית)
+        u = 10 * (tau_w**3) - 15 * (tau_w**4) + 6 * (tau_w**5)
+        u = min(1.0, max(0.0, u))
+        control = plan["control"]
+        base = tuple((1-u)**2 * start[i] + 2*(1-u)*u*control[i] + u*u*target[i] for i in (0, 1))
+        # מעטפת רעידות שמתחילה ומסתיימת באפס
+        env = 4.0 * u * (1.0 - u)
+        phi1, phi2 = plan.get("tremor_phases", (0.0, 0.0))
+        tremor = 2.5 * env * (0.7 * math.sin(2 * math.pi * 10.0 * elapsed + phi1) +
+                              0.3 * math.cos(2 * math.pi * 18.0 * elapsed + phi2))
+        return tuple(base[i] + tremor * plan["normal"][i] for i in (0, 1))
+
+    # שאר הבוטים הנאיביים (מהירות קבועה u = tau)
+    u = tau
     if plan["source_type"] == "bot_curved":
         control = plan["control"]
         return tuple((1-u)**2 * start[i] + 2*(1-u)*u*control[i] + u*u*target[i]
@@ -291,6 +338,14 @@ def run_noisy_bot():
     run_bot("bot_noisy")
 
 
+def run_smart_jerk_bot():
+    run_bot("bot_smart_jerk")
+
+
+def run_smart_full_bot():
+    run_bot("bot_smart_full")
+
+
 # Start a fresh recording only when the user clicks inside the green circle.
 def start_recording(event):
     # Ignore extra start clicks while a recording is already active.
@@ -338,15 +393,12 @@ def add_sample(x, y, elapsed_time=None):
             tags="trajectory"
         )
 
-    # Finish at the first sampled position inside the red circle.
-    if inside_circle(
-        x,
-        y,
-        target_x,
-        target_y,
-        radius
+    # Finish if the current point is inside the target, OR if the movement segment crossed it.
+    if inside_circle(x, y, target_x, target_y, radius) or segment_intersects_circle(
+        previous["x"], previous["y"], x, y, target_x, target_y, radius
     ):
         finish_recording()
+
 
 
 # Poll human positions or evaluate the bot with the same real-time callback loop.
@@ -413,14 +465,11 @@ def invalidate_trial(reason):
     )
 
 
+
 # Handle Tkinter leave events; the event argument is supplied by the binding.
 def on_canvas_leave(event):
-    # A simulated bot does not move the physical pointer, which may be over a button.
     if not recording or active_source != "human":
         return
-
-    # A leave notification alone is not proof that the pointer is outside now.
-    # Validate its current position, including events queued before a retry.
     screen_x, screen_y = root.winfo_pointerxy()
     x = screen_x - canvas.winfo_rootx()
     y = screen_y - canvas.winfo_rooty()
@@ -428,6 +477,20 @@ def on_canvas_leave(event):
         invalidate_trial("העכבר יצא ממשטח הציור")
 
 
+# Handle real-time hardware mouse motion events to capture fast movements with zero delay.
+def on_mouse_move(event):
+    if not recording or active_source != "human":
+        return
+
+    # Check if inside canvas
+    if not (0 <= event.x < canvas.winfo_width() and 0 <= event.y < canvas.winfo_height()):
+        invalidate_trial("העכבר יצא ממשטח הציור")
+        return
+
+    # Record point only if it moved from the previous position
+    if trajectory and (event.x != trajectory[-1]["x"] or event.y != trajectory[-1]["y"]):
+        elapsed = time.perf_counter() - start_time
+        add_sample(event.x, event.y, elapsed)
 # Save the completed trial before advancing the ID and preparing the next layout.
 def finish_recording():
     global recording, sampling_job, trajectory, start_time
@@ -553,6 +616,8 @@ for label, command, color in (
     ("בוט ליניארי", run_linear_bot, "purple"),
     ("בוט מעוקל", run_curved_bot, "orange"),
     ("בוט רועש", run_noisy_bot, "teal"),
+    ("בוט Min Jerk", run_smart_jerk_bot, "magenta"),
+    ("בוט ביומכני", run_smart_full_bot, "brown"),
 ):
     button = tk.Button(bot_frame, text=label, command=command, fg=color)
     button.pack(side=tk.LEFT, padx=5)
@@ -563,14 +628,23 @@ cancel_button.pack(side=tk.LEFT, padx=5)
 
 
 # Connect mouse events to their functions
+# Connect mouse events to their functions
 canvas.bind("<Button-1>", start_recording)
 canvas.bind("<Leave>", on_canvas_leave)
-
+canvas.bind("<Motion>", on_mouse_move)
+canvas.bind("<B1-Motion>", on_mouse_move)
 
 # Wait for layout before choosing centers, and keep the full drawing area visible.
 root.update_idletasks()
 root.minsize(root.winfo_reqwidth(), root.winfo_reqheight())
 randomize_circles()
+def on_close():
+    global sampling_job
+    if sampling_job is not None:
+        root.after_cancel(sampling_job)
+        sampling_job = None
+    root.destroy()
 
+root.protocol("WM_DELETE_WINDOW", on_close)
 # Run the event loop that processes clicks, leave events and scheduled samples.
 root.mainloop()
