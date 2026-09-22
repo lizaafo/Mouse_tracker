@@ -21,6 +21,8 @@ def run_classification():
 
     # פיצ'רים גאומטריים וקינמטיים ללמידה
     features = [
+        "power_law_beta",
+        "power_law_r",
         "peak_to_mean_speed",
         "max_chord_dev_px",
         "curvature_std",

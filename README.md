@@ -48,7 +48,8 @@ project/
 │   ├── trajectories_comparison.png # השוואת 4 מסלולים מייצגים במישור
 │   ├── features_scatter.png        # תרשים פיזור של המדדים עם גבולות החלטה
 │   ├── velocity_profiles.png       # פרופילי מהירות לאורך זמן (Bell-shaped vs. Flat)
-│   └── decision_tree_diagram.png   # עץ ההחלטה שנלמד לזיהוי מקור התנועה
+│   ├── decision_tree_diagram.png   # עץ ההחלטה שנלמד לזיהוי מקור התנועה
+│   └── two_thirds_power_law.png    # תיקוף חוק שני-השלישים (log v מול log kappa ו-Boxplot של beta)
 └── data/                           # הקלטות גולמיות מחולקות ל-Sessions (session_01 ואילך)
 ```
 
@@ -109,6 +110,8 @@ python3 -m unittest test_analyze_trajectories.py test_mouse_bots.py
 | | `mean_speed_px_s` | מהירות ממוצעת לאורך המסלול. |
 | | `peak_to_mean_speed` | יחס שיא המהירות למהירות הממוצעת: $\approx 1.0$ בבוט מהירות אחידה, $\approx 1.88$ ב-Min-Jerk, $\approx 2.0-2.6$ באדם. |
 | | `stationary_interval_s` | סך זמני השהייה שבהם העכבר לא זז (אופייני לעצירות תיקון אנושיות). |
+| **חוק שני-השלישים** | `power_law_beta` | מעריך חוק שני-השלישים ($\log v = C - \beta \log \kappa$). באדם $\beta \approx 0.33-0.40$, בבוטים $\beta \approx 0.0$. |
+| | `power_law_r` | מתאם פירסון בין $\log v$ ל-$\log \kappa$ לאורך המסלול (שלילי מובהק באדם, אפסי בבוטים). |
 | **זוויות וכיוון** | `total_angle_change` | סך שינויי הזווית המצטברים ברדיאנים לאורך המסלול. |
 
 ---

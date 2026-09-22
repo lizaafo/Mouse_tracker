@@ -320,12 +320,120 @@ def plot_decision_tree():
     print(f"  Saved: {out_path.name}")
 
 
+# =============================================================================
+# גרף 5: חוק שני-השלישים (Two-Thirds Power Law Analysis)
+# =============================================================================
+def plot_two_thirds_power_law():
+    print("Generating Figure 5: Two-Thirds Power Law analysis...")
+    if not SUMMARY_CSV.exists():
+        print("  Error: summary CSV not found.")
+        return
+
+    df = pd.read_csv(SUMMARY_CSV)
+    df_clean = df.dropna(subset=["power_law_beta", "source_type"])
+    if df_clean.empty:
+        print("  Error: no power law data found in summary CSV.")
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
+
+    # פאנל שמאלי: Boxplot של מעריך חוק שני השלישים (Beta) לפי סוג תנועה
+    sources_order = ["human", "bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full"]
+    labels_order = ["Human", "Linear", "Curved", "Noisy", "Min-Jerk", "Biomechanical"]
+    colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b"]
+
+    data_to_plot = []
+    active_labels = []
+    active_colors = []
+    for src, lbl, col in zip(sources_order, labels_order, colors):
+        vals = df_clean[df_clean["source_type"] == src]["power_law_beta"].values
+        if len(vals) > 0:
+            data_to_plot.append(vals)
+            active_labels.append(f"{lbl}\n(n={len(vals)})")
+            active_colors.append(col)
+
+    bplot = ax1.boxplot(data_to_plot, tick_labels=active_labels, patch_artist=True, medianprops=dict(color="black", lw=1.5))
+    for patch, col in zip(bplot['boxes'], active_colors):
+        patch.set_facecolor(col)
+        patch.set_alpha(0.65)
+
+    ax1.axhline(0.333, color="green", linestyle="--", lw=1.5, label=r"Theoretical $\beta = 1/3$ (Two-Thirds Law)")
+    ax1.axhline(0.0, color="gray", linestyle=":", lw=1.2, label=r"Zero Coupling ($\beta = 0$)")
+    ax1.set_title("Power Law Exponent (Beta) Across Movement Sources", fontsize=12, fontweight="bold")
+    ax1.set_ylabel(r"Power Law Exponent [$\beta$]", fontsize=11)
+    ax1.grid(True, linestyle="--", alpha=0.55)
+    ax1.legend(loc="upper right", fontsize=8.5)
+
+    # פאנל ימני: פיזור log(kappa) מול log(v) של תנועה אנושית מייצגת מול בוט
+    human_file = find_sample_trajectory("human")
+    bot_file = find_sample_trajectory("bot_smart_full") or find_sample_trajectory("bot_curved")
+
+    for file_p, label, col in [(human_file, "Human Movement", "#1f77b4"), (bot_file, "Bot Movement", "#8c564b")]:
+        if not file_p or not file_p.exists():
+            continue
+        try:
+            d = pd.read_csv(file_p)
+            pts = np.column_stack([d['x'], d['y']])
+            times = d['time'].values
+            dists = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+            m = np.r_[True, dists > 0]
+            cp, ct = pts[m], times[m]
+            cs = np.r_[0, np.cumsum(dists[dists > 0])]
+            if cs[-1] == 0:
+                continue
+            gs = np.linspace(0, cs[-1], 100)
+            gt = np.interp(gs, cs, ct)
+            ds = gs[1] - gs[0]
+            dt = np.gradient(gt)
+            v = ds / np.maximum(dt, 1e-6)
+
+            offsets = np.arange(-3, 4, dtype=float)
+            design = np.column_stack([offsets ** deg for deg in range(4)])
+            sx = np.interp(gs, cs, cp[:, 0])
+            sy = np.interp(gs, cs, cp[:, 1])
+            s_pts = np.column_stack([sx, sy])
+            curvs = []
+            for c in range(3, 97):
+                loc = s_pts[c - 3:c + 4] - s_pts[c]
+                coef = np.linalg.lstsq(design, loc, rcond=None)[0]
+                f = coef[1] / ds
+                s = 2 * coef[2] / (ds**2)
+                sp = np.linalg.norm(f)
+                k = abs(f[0]*s[1] - f[1]*s[0]) / (sp**3) if sp > 1e-5 else 0
+                curvs.append(k)
+            curvs = np.array(curvs)
+            v_mid = v[3:97]
+            valid = (curvs > 1e-4) & (v_mid > 5.0)
+            if np.sum(valid) >= 10:
+                lk = np.log(curvs[valid])
+                lv = np.log(v_mid[valid])
+                ax2.scatter(lk, lv, color=col, alpha=0.6, s=35, label=f"{label} points")
+                p = np.polyfit(lk, lv, 1)
+                ax2.plot(lk, np.polyval(p, lk), color=col, lw=2.2, label=rf"{label} Fit ($\beta={-p[0]:.2f}$)")
+        except Exception:
+            pass
+
+    ax2.set_title(r"Tangential Speed vs. Curvature: $\log(v) = C - \beta\log(\kappa)$", fontsize=12, fontweight="bold")
+    ax2.set_xlabel(r"Log Curvature [$\ln(\kappa)$]", fontsize=11)
+    ax2.set_ylabel(r"Log Tangential Speed [$\ln(v)$]", fontsize=11)
+    ax2.grid(True, linestyle="--", alpha=0.55)
+    ax2.legend(loc="upper right", fontsize=8.5)
+
+    plt.suptitle("Validation of the Two-Thirds Power Law in Mouse Movements", fontsize=14, fontweight="bold", y=0.98)
+    plt.tight_layout()
+    out_path = PLOTS_DIR / "two_thirds_power_law.png"
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+    print(f"  Saved: {out_path.name}")
+
+
 def main():
     setup_plots_dir()
     plot_trajectories_comparison()
     plot_features_scatter()
     plot_velocity_profiles()
     plot_decision_tree()
+    plot_two_thirds_power_law()
     print(f"\nAll plots generated successfully in: {PLOTS_DIR}")
 
 

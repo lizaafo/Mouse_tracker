@@ -159,6 +159,7 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         "curvature_total_points": 0, "curvature_excluded_ranges": "[]",
         "curvature_reversal_count": 0, "curvature_sparse_gap_count": 0,
         "num_resample_points": num_resample_points, "smoothing_window": smoothing_window,
+        "power_law_beta": np.nan, "power_law_r": np.nan,
     }
     notes = []
     try:
@@ -276,6 +277,37 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
                               curvature_std=float(values.std()))                
                 if not used.all():
                     notes.append(f"Curvature describes retained portions only ({profile['coverage_pct']:.1f}% of path length)")
+
+                # Two-Thirds Power Law: v(t) ~ alpha * kappa(t)^(-beta)
+                # Evaluated on the same resampled arc-length grid
+                if result.get("timing_status") == "ok" and length > 0 and len(clean) >= 7:
+                    try:
+                        cum_s = np.r_[0.0, np.cumsum(segments)]
+                        grid_s = np.linspace(0.0, length, num_resample_points)
+                        clean_times = numeric_column(df, "time")[np.r_[True, raw_steps > 0]]
+                        grid_t = np.interp(grid_s, cum_s, clean_times)
+                        ds = grid_s[1] - grid_s[0]
+                        dt = np.gradient(grid_t)
+                        dt_safe = np.maximum(dt, 1e-6)
+                        v_grid = ds / dt_safe
+
+                        half_w = smoothing_window // 2
+                        v_mid = v_grid[half_w:num_resample_points - half_w]
+                        k_mid = profile["curvature"]
+
+                        valid_pl = (used & np.isfinite(k_mid) & (k_mid > 5e-5) &
+                                    np.isfinite(v_mid) & (v_mid > 5.0))
+                        if np.sum(valid_pl) >= 8:
+                            log_k = np.log(k_mid[valid_pl])
+                            log_v = np.log(v_mid[valid_pl])
+                            # Fit: log(v) = intercept - beta * log(kappa)
+                            slope, _ = np.polyfit(log_k, log_v, 1)
+                            beta = float(-slope)
+                            r_mat = np.corrcoef(log_k, log_v)
+                            r_val = float(r_mat[0, 1]) if r_mat.shape == (2, 2) else np.nan
+                            result.update(power_law_beta=beta, power_law_r=r_val)
+                    except Exception:
+                        pass
             else:
                 notes.append("No connected supported portion remains for curvature")
         result["status"] = "review" if notes else "ok"
