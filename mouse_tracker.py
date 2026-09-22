@@ -9,6 +9,7 @@ import random
 import time
 import uuid
 from pathlib import Path
+import numpy as np
 
 
 # Create the main window
@@ -58,7 +59,8 @@ bot_plan = None
 BOT_DURATION_S = 1.0  # Common baseline for all three bots, not a measured human duration.
 SOURCE_COLORS = {"human": "blue", "bot_linear": "purple",
                  "bot_curved": "orange", "bot_noisy": "teal",
-                 "bot_smart_jerk": "magenta", "bot_smart_full": "brown"}
+                 "bot_smart_jerk": "magenta", "bot_smart_full": "brown",
+                 "bot_adversarial": "#d81b60"}
 
 # Create the data directory next to this script
 DATA_DIRECTORY = Path(__file__).resolve().parent / "data"
@@ -182,7 +184,7 @@ def segment_intersects_circle(x1, y1, x2, y2, center_x, center_y, circle_radius)
 
 # Construct a reproducible geometric plan without touching recording state or files.
 def make_bot_plan(source_type, center, target, width, height, seed):
-    if source_type not in ("bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full"):
+    if source_type not in ("bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full", "bot_adversarial"):
         raise ValueError("Unknown bot type")
     rng = random.Random(seed)
     # Start inside the green circle, rather than always at its exact center.
@@ -200,7 +202,7 @@ def make_bot_plan(source_type, center, target, width, height, seed):
             "normal": normal, "duration": BOT_DURATION_S, "seed": seed,
             "control": None, "noise_amplitude": 0.0, "noise_knots": [],
             "generator_version": "bots_v1"}
-    if source_type in ("bot_curved", "bot_smart_jerk", "bot_smart_full"):
+    if source_type in ("bot_curved", "bot_smart_jerk", "bot_smart_full", "bot_adversarial"):
         # Check available space in both perpendicular directions (+1 and -1)
         valid_options = []
         for sign in (-1, 1):
@@ -217,14 +219,38 @@ def make_bot_plan(source_type, center, target, width, height, seed):
 
         if valid_options:
             sign, direction, max_limit = rng.choice(valid_options)
-            curve_range = (0.15, 0.35) if source_type == "bot_smart_full" else (0.2, 0.45)
+            curve_range = (0.2, 0.4) if source_type == "bot_adversarial" else ((0.15, 0.35) if source_type == "bot_smart_full" else (0.2, 0.45))
             amplitude = min(distance * rng.uniform(*curve_range), max_limit * 0.9)
             plan["control"] = tuple(midpoint[i] + amplitude * direction[i] for i in (0, 1))
         else:
             plan["control"] = midpoint
 
-        if source_type == "bot_smart_full":
+        if source_type in ("bot_smart_full", "bot_adversarial"):
             plan["tremor_phases"] = (rng.uniform(0, 2 * math.pi), rng.uniform(0, 2 * math.pi))
+
+        if source_type == "bot_adversarial":
+            # Couple instantaneous speed with curvature: v(s) ~ (kappa(s) + eps)^(-1/3)
+            # Modulated by a smooth Minimum-Jerk bell envelope
+            ctrl = plan["control"]
+            u_arr = np.linspace(0.0, 1.0, 101)
+            d1_x = 2 * (1 - u_arr) * (ctrl[0] - start[0]) + 2 * u_arr * (target[0] - ctrl[0])
+            d1_y = 2 * (1 - u_arr) * (ctrl[1] - start[1]) + 2 * u_arr * (target[1] - ctrl[1])
+            speed_u = np.hypot(d1_x, d1_y)
+            d2_x = np.full_like(u_arr, 2 * (target[0] - 2 * ctrl[0] + start[0]))
+            d2_y = np.full_like(u_arr, 2 * (target[1] - 2 * ctrl[1] + start[1]))
+            cross = np.abs(d1_x * d2_y - d1_y * d2_x)
+            kappa_u = cross / np.maximum(speed_u ** 3, 1e-6)
+
+            bell = 30.0 * (u_arr ** 2) * ((1.0 - u_arr) ** 2) + 0.08
+            v_target = (kappa_u + 1e-4) ** (-1.0 / 3.0) * bell
+            v_target = np.maximum(v_target, 0.05)
+
+            du = u_arr[1] - u_arr[0]
+            dt_steps = (speed_u * du) / v_target
+            t_cum = np.r_[0.0, np.cumsum(dt_steps[:-1])]
+            t_norm = (t_cum / t_cum[-1]) * plan["duration"]
+            plan["adv_t_lut"] = t_norm.tolist()
+            plan["adv_u_lut"] = u_arr.tolist()
     elif source_type == "bot_noisy":
         # Correlated lateral disturbances create departures and gradual corrections.
         clearance = min(start[0], target[0], start[1], target[1],
@@ -260,6 +286,19 @@ def bot_position(plan, elapsed):
         phi1, phi2 = plan.get("tremor_phases", (0.0, 0.0))
         tremor = 2.5 * env * (0.7 * math.sin(2 * math.pi * 10.0 * elapsed + phi1) +
                               0.3 * math.cos(2 * math.pi * 18.0 * elapsed + phi2))
+        return tuple(base[i] + tremor * plan["normal"][i] for i in (0, 1))
+
+    # 3. בוט מתחזה אדברסרי: מצמד מהירות לעקמומיות לפי חוק שני-השלישים + Minimum Jerk
+    if plan["source_type"] == "bot_adversarial":
+        t_lut = np.array(plan["adv_t_lut"])
+        u_lut = np.array(plan["adv_u_lut"])
+        t_query = min(plan["duration"], max(0.0, elapsed))
+        u = float(np.interp(t_query, t_lut, u_lut))
+        control = plan["control"]
+        base = tuple((1-u)**2 * start[i] + 2*(1-u)*u*control[i] + u*u*target[i] for i in (0, 1))
+        env = 4.0 * u * (1.0 - u)
+        phi1, _ = plan.get("tremor_phases", (0.0, 0.0))
+        tremor = 1.8 * env * math.sin(2 * math.pi * 9.0 * elapsed + phi1)
         return tuple(base[i] + tremor * plan["normal"][i] for i in (0, 1))
 
     # שאר הבוטים הנאיביים (מהירות קבועה u = tau)
@@ -344,6 +383,10 @@ def run_smart_jerk_bot():
 
 def run_smart_full_bot():
     run_bot("bot_smart_full")
+
+
+def run_adversarial_bot():
+    run_bot("bot_adversarial")
 
 
 # Start a fresh recording only when the user clicks inside the green circle.
@@ -618,6 +661,7 @@ for label, command, color in (
     ("בוט רועש", run_noisy_bot, "teal"),
     ("בוט Min Jerk", run_smart_jerk_bot, "magenta"),
     ("בוט ביומכני", run_smart_full_bot, "brown"),
+    ("בוט מתחזה", run_adversarial_bot, "#d81b60"),
 ):
     button = tk.Button(bot_frame, text=label, command=command, fg=color)
     button.pack(side=tk.LEFT, padx=5)
@@ -642,6 +686,11 @@ def on_close():
     if sampling_job is not None:
         root.after_cancel(sampling_job)
         sampling_job = None
+    if SESSION_DIRECTORY.exists() and not list(SESSION_DIRECTORY.glob("*.csv")):
+        try:
+            SESSION_DIRECTORY.rmdir()
+        except Exception:
+            pass
     root.destroy()
 
 root.protocol("WM_DELETE_WINDOW", on_close)

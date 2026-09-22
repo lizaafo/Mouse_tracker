@@ -58,6 +58,100 @@ def compute_total_angle_change(points):
     return float(np.abs(wrapped).sum()) if len(wrapped) else 0.0
 
 
+def compute_bezier_residual(points):
+    """Compute the mean Euclidean residual from an optimal fitted quadratic Bézier curve.
+    
+    A synthetic Bézier bot (bot_curved, bot_linear) conforms almost perfectly (residual ~ 0-1px).
+    Human movement, even fast curved sweeps, originates from articulated joints with
+    natural biomechanical variance and asymmetry, yielding higher residuals (typically 3-15px).
+    """
+    if len(points) < 4:
+        return 0.0
+    p0 = points[0]
+    p2 = points[-1]
+    chord_len = float(np.linalg.norm(p2 - p0))
+    if chord_len < 1e-4:
+        return 0.0
+    dists = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    s = np.r_[0.0, np.cumsum(dists)]
+    total_s = float(s[-1])
+    if total_s < 1e-4:
+        return 0.0
+    u = s / total_s
+    # Quadratic Bezier: B(u) = (1-u)^2 * P0 + 2(1-u)u * P1 + u^2 * P2
+    # B(u) - (1-u)^2 * P0 - u^2 * P2 = 2(1-u)u * P1
+    A = (2.0 * (1.0 - u) * u)[:, np.newaxis]
+    b = points - ((1.0 - u)**2)[:, np.newaxis] * p0 - (u**2)[:, np.newaxis] * p2
+    denom = float(np.sum(A**2))
+    if denom < 1e-8:
+        return 0.0
+    p1 = np.sum(A * b, axis=0) / denom
+    fitted = ((1.0 - u)**2)[:, np.newaxis] * p0 + A * p1 + (u**2)[:, np.newaxis] * p2
+    residuals = np.linalg.norm(points - fitted, axis=1)
+    return float(np.mean(residuals))
+
+
+def compute_dimensionless_jerk(points, times, duration, length, num_grid=100):
+    """Compute normalized dimensionless jerk score: integral(jerk^2 dt) * (T^5 / L^2).
+    
+    Minimum Jerk theoretical lower bound for point-to-point motion is ~60-150.
+    Uses CubicSpline for smooth continuous derivative evaluation when available,
+    avoiding finite difference zero-jerk collapse on fast movements.
+    """
+    if duration <= 0 or length <= 0 or len(points) < 5 or len(times) < 5:
+        return np.nan, np.nan
+    
+    unique_idx = np.r_[True, np.diff(times) > 1e-5]
+    if np.sum(unique_idx) < 5:
+        return np.nan, np.nan
+    
+    t_clean = times[unique_idx] - times[0]
+    p_clean = points[unique_idx]
+    
+    t_grid = np.linspace(0, duration, num_grid)
+    dt_grid = t_grid[1] - t_grid[0]
+    if dt_grid <= 0:
+        return np.nan, np.nan
+    
+    try:
+        from scipy.interpolate import CubicSpline
+        cs_x = CubicSpline(t_clean, p_clean[:, 0], bc_type='natural')
+        cs_y = CubicSpline(t_clean, p_clean[:, 1], bc_type='natural')
+        jx = cs_x.derivative(nu=3)(t_grid)
+        jy = cs_y.derivative(nu=3)(t_grid)
+    except Exception:
+        x_grid = np.interp(t_grid, t_clean, p_clean[:, 0])
+        y_grid = np.interp(t_grid, t_clean, p_clean[:, 1])
+        jx = np.diff(x_grid, n=3) / (dt_grid ** 3)
+        jy = np.diff(y_grid, n=3) / (dt_grid ** 3)
+    
+    # Trapezoidal integral: sum( (jx^2 + jy^2) * dt )
+    jerk_sq_integral = float(np.sum(jx ** 2 + jy ** 2) * dt_grid)
+    dimless_jerk = float(jerk_sq_integral * (duration ** 5) / (length ** 2))
+    log_dimless_jerk = float(np.log10(max(1.0, dimless_jerk)))
+    return dimless_jerk, log_dimless_jerk
+
+
+def compute_affine_velocity_metrics(k_mid, v_mid, valid_mask):
+    """Compute Affine Velocity: v_aff = kappa^(1/3) * v.
+    
+    Under the Two-Thirds Power Law (v ~ kappa^(-1/3)), affine velocity v_aff is constant,
+    so its Coefficient of Variation (CV = std / mean) is minimal for natural human movement.
+    """
+    if not np.any(valid_mask) or np.sum(valid_mask) < 6:
+        return np.nan
+    
+    k_val = k_mid[valid_mask]
+    v_val = v_mid[valid_mask]
+    
+    v_aff = (k_val ** (1.0 / 3.0)) * v_val
+    mean_aff = np.mean(v_aff)
+    if mean_aff <= 1e-6:
+        return np.nan
+    cv_aff = float(np.std(v_aff) / mean_aff)
+    return cv_aff
+
+
 def estimate_curvature(points, segment_lengths, count, window):
     # Resample only the geometric copy; repeated timed samples remain in the source.
     distance = np.r_[0.0, np.cumsum(segment_lengths)]
@@ -113,7 +207,7 @@ def local_curvature_profile(points, segment_lengths, count=100, window=7):
     exclude(0, radius, "endpoint")
     exclude(length - radius, length, "endpoint")
     allowed = np.isfinite(curvature)
-    gaps = np.flatnonzero(segment_lengths > max(80.0, 2.5 * span))
+    gaps = np.flatnonzero(segment_lengths > span)
     for i in gaps:
         # Mask every fit whose full window touches the unobserved source interval.
         left, right = cumulative[i] - radius, cumulative[i + 1] + radius
@@ -160,6 +254,9 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         "curvature_reversal_count": 0, "curvature_sparse_gap_count": 0,
         "num_resample_points": num_resample_points, "smoothing_window": smoothing_window,
         "power_law_beta": np.nan, "power_law_r": np.nan,
+        "dimensionless_jerk": np.nan, "log_dimensionless_jerk": np.nan,
+        "affine_velocity_cv": np.nan,
+        "bezier_residual_px": np.nan, "time_to_peak_ratio": np.nan,
     }
     notes = []
     try:
@@ -173,7 +270,7 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
         # Earlier recordings in this project predate bots and are human trials.
         # Keep provenance as labels, not as movement features for a classifier.
         result["source_type"] = constant_value(df, "source_type", "human")
-        if result["source_type"] not in ("human", "bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full"):
+        if result["source_type"] not in ("human", "bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full", "bot_adversarial"):
                     raise ValueError("Unrecognized source_type")
         for key in ("bot_seed", "planned_duration_s", "control_x", "control_y",
                     "noise_amplitude_px", "generator_version"):
@@ -203,6 +300,10 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
             result["max_chord_dev_px"] = float(np.max(cross / chord_len))
         else:
             result["max_chord_dev_px"] = 0.0
+
+        # Pure spatial geometry: Euclidean residual against optimal quadratic Bézier curve
+        result["bezier_residual_px"] = compute_bezier_residual(clean)
+
         # Timing uses every original sample, including pauses, with actual intervals.
         if "time" in df:
             try:
@@ -225,8 +326,15 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
                     slice_speeds = np.hypot(np.diff(grid_x), np.diff(grid_y)) / (duration / 20.0)
                     v_mean = np.mean(slice_speeds)
                     result["peak_to_mean_speed"] = float(np.max(slice_speeds) / v_mean) if v_mean > 0 else 1.0
+                    peak_idx = int(np.argmax(slice_speeds))
+                    result["time_to_peak_ratio"] = float((peak_idx + 0.5) / len(slice_speeds))
                 else:
-                    result["peak_to_mean_speed"] = 1.0    
+                    result["peak_to_mean_speed"] = 1.0
+                    result["time_to_peak_ratio"] = 0.5
+
+                # Dimensionless jerk: integral(jerk^2 dt) * (T^5 / L^2)
+                dimless_j, log_dimless_j = compute_dimensionless_jerk(points, times, duration, length)
+                result.update(dimensionless_jerk=dimless_j, log_dimensionless_jerk=log_dimless_j)
             except ValueError as error:
                 result["timing_status"] = "invalid"
                 notes.append(str(error))
@@ -300,12 +408,18 @@ def analyze_single_trajectory(csv_path, num_resample_points=100, smoothing_windo
                         if np.sum(valid_pl) >= 8:
                             log_k = np.log(k_mid[valid_pl])
                             log_v = np.log(v_mid[valid_pl])
-                            # Fit: log(v) = intercept - beta * log(kappa)
-                            slope, _ = np.polyfit(log_k, log_v, 1)
-                            beta = float(-slope)
-                            r_mat = np.corrcoef(log_k, log_v)
-                            r_val = float(r_mat[0, 1]) if r_mat.shape == (2, 2) else np.nan
-                            result.update(power_law_beta=beta, power_law_r=r_val)
+                            delta_log_k = float(np.ptp(log_k))
+                            if result.get("max_chord_dev_px", 0.0) < 4.0 or delta_log_k < 0.6:
+                                # Near straight line: curvature dynamic range is too narrow for reliable power law
+                                result.update(power_law_beta=0.0, power_law_r=0.0, affine_velocity_cv=0.0)
+                            else:
+                                # Fit: log(v) = intercept - beta * log(kappa)
+                                slope, _ = np.polyfit(log_k, log_v, 1)
+                                beta = float(-slope)
+                                r_mat = np.corrcoef(log_k, log_v)
+                                r_val = float(r_mat[0, 1]) if r_mat.shape == (2, 2) else np.nan
+                                cv_aff = compute_affine_velocity_metrics(k_mid, v_mid, valid_pl)
+                                result.update(power_law_beta=beta, power_law_r=r_val, affine_velocity_cv=cv_aff)
                     except Exception:
                         pass
             else:

@@ -15,7 +15,7 @@ import uuid
 
 from analyze_trajectories import analyze_single_trajectory
 
-ALL_BOTS = ("bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full")
+ALL_BOTS = ("bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full", "bot_adversarial")
 
 
 class Widget:
@@ -56,11 +56,12 @@ class BotTests(unittest.TestCase):
         self.counter = 0
         self.pointer = (-100, -100)
         self.env = dict(
-            csv=csv, math=math, random=random.Random(13), uuid=uuid,
+            csv=csv, math=math, random=random.Random(13), uuid=uuid, np=__import__("numpy"),
             radius=25, CIRCLE_MARGIN=20, MIN_CENTER_DISTANCE=250, BOT_DURATION_S=1.0,
             SOURCE_COLORS={
                 "human": "blue", "bot_linear": "purple", "bot_curved": "orange",
-                "bot_noisy": "teal", "bot_smart_jerk": "magenta", "bot_smart_full": "brown"
+                "bot_noisy": "teal", "bot_smart_jerk": "magenta", "bot_smart_full": "brown",
+                "bot_adversarial": "#d81b60"
             },
             start_x=100, start_y=300, target_x=800, target_y=300,
             recording=False, trajectory=[], start_time=None, sampling_job=None,
@@ -68,7 +69,7 @@ class BotTests(unittest.TestCase):
             participant_id="P01", participant_number=1, SAMPLE_INTERVAL_MS=5,
             SESSION_ID="session_test", SESSION_DIRECTORY=Path(self.directory.name),
             canvas=Widget(), status_label=Widget(), participant_label=Widget(),
-            bot_buttons=[Widget() for _ in range(5)], cancel_button=Widget(),
+            bot_buttons=[Widget() for _ in range(6)], cancel_button=Widget(),
             time=SimpleNamespace(perf_counter=self.now),
             root=SimpleNamespace(
                 winfo_pointerxy=lambda: self.pointer,

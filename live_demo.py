@@ -21,6 +21,7 @@ from tkinter import font
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 
 
@@ -39,10 +40,14 @@ class TrajectoryClassifier:
             "power_law_beta",
             "power_law_r",
             "peak_to_mean_speed",
+            "time_to_peak_ratio",
             "max_chord_dev_px",
+            "bezier_residual_px",
             "curvature_std",
             "path_ratio",
             "total_angle_change",
+            "log_dimensionless_jerk",
+            "affine_velocity_cv",
         ]
         self.clf_binary = None
         self.clf_multi = None
@@ -61,10 +66,10 @@ class TrajectoryClassifier:
             y_binary = clean_df["source_type"].apply(lambda s: "human" if s == "human" else "bot")
             y_multi = clean_df["source_type"]
 
-            self.clf_binary = DecisionTreeClassifier(max_depth=3, random_state=42)
+            self.clf_binary = RandomForestClassifier(n_estimators=30, random_state=42)
             self.clf_binary.fit(X, y_binary)
 
-            self.clf_multi = DecisionTreeClassifier(max_depth=4, random_state=42)
+            self.clf_multi = RandomForestClassifier(n_estimators=30, random_state=42)
             self.clf_multi.fit(X, y_multi)
 
             self.is_trained = True
@@ -74,20 +79,53 @@ class TrajectoryClassifier:
     def predict(self, metrics):
         if not self.is_trained:
             # Fallback heuristic if dataset wasn't loaded
-            is_human = metrics.get("peak_to_mean_speed", 1.0) > 1.95 or metrics.get("power_law_beta", 0.0) > 0.15
-            return ("human" if is_human else "bot", "human" if is_human else "bot_naive")
+            is_human = metrics.get("log_dimensionless_jerk", 0.0) > 7.5 or metrics.get("peak_to_mean_speed", 1.0) > 1.95
+            return ("human", 0.95, "human", 0.95) if is_human else ("bot", 0.90, "bot_naive", 0.90)
 
-        row = pd.DataFrame([{f: metrics.get(f, 0.0) for f in self.features}])
-        # Fill any nan with neutral median
-        row = row.fillna(0.0)
-        pred_binary = self.clf_binary.predict(row)[0]
-        pred_multi = self.clf_multi.predict(row)[0]
-        return pred_binary, pred_multi
+        row = pd.DataFrame([{f: metrics.get(f, 0.0) for f in self.features}]).fillna(0.0)
+        
+        proba_bin = self.clf_binary.predict_proba(row)[0]
+        idx_b = int(np.argmax(proba_bin))
+        pred_bin = str(self.clf_binary.classes_[idx_b])
+        conf_bin = float(proba_bin[idx_b])
+
+        proba_m = self.clf_multi.predict_proba(row)[0]
+        idx_m = int(np.argmax(proba_m))
+        pred_multi = str(self.clf_multi.classes_[idx_m])
+        conf_multi = float(proba_m[idx_m])
+
+        return pred_bin, conf_bin, pred_multi, conf_multi
 
 
 # =============================================================================
 # In-Memory Real-Time Geometric and Kinematic Metric Extraction
 # =============================================================================
+def compute_bezier_residual(points):
+    """Compute the mean Euclidean residual from an optimal fitted quadratic Bézier curve."""
+    if len(points) < 4:
+        return 0.0
+    p0 = points[0]
+    p2 = points[-1]
+    chord_len = float(np.linalg.norm(p2 - p0))
+    if chord_len < 1e-4:
+        return 0.0
+    dists = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    s = np.r_[0.0, np.cumsum(dists)]
+    total_s = float(s[-1])
+    if total_s < 1e-4:
+        return 0.0
+    u = s / total_s
+    A = (2.0 * (1.0 - u) * u)[:, np.newaxis]
+    b = points - ((1.0 - u)**2)[:, np.newaxis] * p0 - (u**2)[:, np.newaxis] * p2
+    denom = float(np.sum(A**2))
+    if denom < 1e-8:
+        return 0.0
+    p1 = np.sum(A * b, axis=0) / denom
+    fitted = ((1.0 - u)**2)[:, np.newaxis] * p0 + A * p1 + (u**2)[:, np.newaxis] * p2
+    residuals = np.linalg.norm(points - fitted, axis=1)
+    return float(np.mean(residuals))
+
+
 def extract_live_metrics(trajectory, num_points=100, window=7):
     """Compute geometric and kinematic features directly from in-memory trajectory."""
     if len(trajectory) < 3:
@@ -116,6 +154,9 @@ def extract_live_metrics(trajectory, num_points=100, window=7):
     else:
         max_chord_dev = 0.0
 
+    # Pure spatial geometry: Bézier fit residual
+    bezier_residual_px = compute_bezier_residual(clean)
+
     # Total angle change
     if len(clean) >= 2:
         vectors = np.diff(clean, axis=0)
@@ -130,7 +171,7 @@ def extract_live_metrics(trajectory, num_points=100, window=7):
     duration = float(times[-1] - times[0]) if len(times) >= 2 else 0.0
     mean_speed = (length / duration) if duration > 0 else 0.0
 
-    # Velocity profile: Peak to mean speed across 20 time slices
+    # Velocity profile: Peak to mean speed across 20 time slices & Time to peak
     dt = np.diff(times)
     unique_times = np.r_[True, dt > 1e-4]
     if duration > 0 and np.sum(unique_times) >= 5:
@@ -140,16 +181,20 @@ def extract_live_metrics(trajectory, num_points=100, window=7):
         slice_speeds = np.hypot(np.diff(grid_x), np.diff(grid_y)) / (duration / 20.0)
         v_mean = np.mean(slice_speeds)
         peak_to_mean_speed = float(np.max(slice_speeds) / v_mean) if v_mean > 0 else 1.0
+        peak_idx = int(np.argmax(slice_speeds))
+        time_to_peak_ratio = float((peak_idx + 0.5) / len(slice_speeds))
     else:
         peak_to_mean_speed = 1.0
+        time_to_peak_ratio = 0.5
 
     # Curvature profile & Two-Thirds Power Law
     mean_curvature = 0.0
     curvature_std = 0.0
     power_law_beta = 0.0
     power_law_r = 0.0
+    affine_velocity_cv = 0.0
 
-    if length > 0 and len(clean) >= 7:
+    if length > 0 and len(clean) >= 6:
         try:
             cum_s = np.r_[0.0, np.cumsum(segments)]
             grid_s = np.linspace(0.0, length, num_points)
@@ -179,20 +224,53 @@ def extract_live_metrics(trajectory, num_points=100, window=7):
                 mean_curvature = float(np.mean(valid_curvs))
                 curvature_std = float(np.std(valid_curvs))
 
-            # Two-Thirds Power Law
-            if duration > 0 and len(clean_t) >= 7:
+            # Two-Thirds Power Law with adaptive support for fast flicks
+            if duration > 0 and len(clean_t) >= 5:
                 grid_t = np.interp(grid_s, cum_s, clean_t)
                 dt_grid = np.gradient(grid_t)
                 v_grid = ds / np.maximum(dt_grid, 1e-6)
                 v_mid = v_grid[half:num_points - half]
                 valid_pl = (curvs_arr > 5e-5) & (v_mid > 5.0) & np.isfinite(curvs_arr) & np.isfinite(v_mid)
-                if np.sum(valid_pl) >= 8:
+                if np.sum(valid_pl) >= 5:
                     lk = np.log(curvs_arr[valid_pl])
                     lv = np.log(v_mid[valid_pl])
-                    poly = np.polyfit(lk, lv, 1)
-                    power_law_beta = float(-poly[0])
-                    r_mat = np.corrcoef(lk, lv)
-                    power_law_r = float(r_mat[0, 1]) if r_mat.shape == (2, 2) else 0.0
+                    if max_chord_dev < 4.0 or float(np.ptp(lk)) < 0.6:
+                        power_law_beta = 0.0
+                        power_law_r = 0.0
+                    else:
+                        poly = np.polyfit(lk, lv, 1)
+                        power_law_beta = float(-poly[0])
+                        r_mat = np.corrcoef(lk, lv)
+                        power_law_r = float(r_mat[0, 1]) if r_mat.shape == (2, 2) else 0.0
+                    
+                    # Affine velocity CV
+                    v_aff = (curvs_arr[valid_pl] ** (1.0 / 3.0)) * v_mid[valid_pl]
+                    m_aff = np.mean(v_aff)
+                    affine_velocity_cv = float(np.std(v_aff) / m_aff) if m_aff > 1e-6 else 0.0
+        except Exception:
+            pass
+
+    # Dimensionless jerk score (using CubicSpline when possible to prevent fast flick collapse)
+    log_dimensionless_jerk = 0.0
+    if duration > 0 and length > 0 and len(clean) >= 5 and len(clean_t) >= 5:
+        try:
+            t_grid_j = np.linspace(0, duration, 100)
+            dt_j = t_grid_j[1] - t_grid_j[0]
+            if dt_j > 0:
+                try:
+                    from scipy.interpolate import CubicSpline
+                    cs_x = CubicSpline(clean_t - clean_t[0], clean[:, 0], bc_type='natural')
+                    cs_y = CubicSpline(clean_t - clean_t[0], clean[:, 1], bc_type='natural')
+                    jx = cs_x.derivative(nu=3)(t_grid_j)
+                    jy = cs_y.derivative(nu=3)(t_grid_j)
+                except Exception:
+                    xj = np.interp(t_grid_j, clean_t - clean_t[0], clean[:, 0])
+                    yj = np.interp(t_grid_j, clean_t - clean_t[0], clean[:, 1])
+                    jx = np.diff(xj, n=3) / (dt_j ** 3)
+                    jy = np.diff(yj, n=3) / (dt_j ** 3)
+                j_int = float(np.sum(jx ** 2 + jy ** 2) * dt_j)
+                dimless_j = j_int * (duration ** 5) / (length ** 2)
+                log_dimensionless_jerk = float(np.log10(max(1.0, dimless_j)))
         except Exception:
             pass
 
@@ -201,14 +279,18 @@ def extract_live_metrics(trajectory, num_points=100, window=7):
         "direct_distance": direct,
         "path_ratio": path_ratio,
         "max_chord_dev_px": max_chord_dev,
+        "bezier_residual_px": bezier_residual_px,
         "duration_s": duration,
         "mean_speed_px_s": mean_speed,
         "peak_to_mean_speed": peak_to_mean_speed,
+        "time_to_peak_ratio": time_to_peak_ratio,
         "total_angle_change": total_angle,
         "mean_curvature": mean_curvature,
         "curvature_std": curvature_std,
         "power_law_beta": power_law_beta,
         "power_law_r": power_law_r,
+        "log_dimensionless_jerk": log_dimensionless_jerk,
+        "affine_velocity_cv": affine_velocity_cv,
     }
 
 
@@ -244,6 +326,7 @@ class LiveDemoApp:
             "bot_noisy": "#00796b",
             "bot_smart_jerk": "#7b1fa2",
             "bot_smart_full": "#5d4037",
+            "bot_adversarial": "#d81b60",
         }
 
         self.source_names_he = {
@@ -253,6 +336,7 @@ class LiveDemoApp:
             "bot_noisy": "בוט רועש (Perturbed Noisy Bot)",
             "bot_smart_jerk": "בוט Min-Jerk (Flash & Hogan)",
             "bot_smart_full": "בוט ביומכני (Biomechanical Tremor Bot)",
+            "bot_adversarial": "בוט מתחזה אדברסרי (Adversarial Power-Law Bot)",
         }
 
         self._build_ui()
@@ -272,7 +356,7 @@ class LiveDemoApp:
         title.pack()
         subtitle = tk.Label(
             header,
-            text="הזיזו את העכבר מהעיגול הירוק אל האדום, או בחרו אחד מ-5 הבוטים לבדיקת הסיווג בזמן אמת",
+            text="הזיזו את העכבר מהעיגול הירוק אל האדום, או בחרו אחד מ-6 הבוטים לבדיקת הסיווג בזמן אמת",
             font=("Helvetica", 10),
             fg="#b0bec5",
             bg="#263238",
@@ -327,6 +411,7 @@ class LiveDemoApp:
             ("בוט רועש", lambda: self.run_bot("bot_noisy"), "#00796b"),
             ("בוט Min-Jerk", lambda: self.run_bot("bot_smart_jerk"), "#9467bd"),
             ("בוט ביומכני", lambda: self.run_bot("bot_smart_full"), "#8c564b"),
+            ("בוט מתחזה 🥷", lambda: self.run_bot("bot_adversarial"), "#d81b60"),
         ]
 
         for text, cmd, col in bot_defs:
@@ -432,11 +517,33 @@ class LiveDemoApp:
             "tremor_phases": (rng.uniform(0, 2 * math.pi), rng.uniform(0, 2 * math.pi)),
         }
 
-        if source_type in ("bot_curved", "bot_smart_jerk", "bot_smart_full"):
+        if source_type in ("bot_curved", "bot_smart_jerk", "bot_smart_full", "bot_adversarial"):
             sign = rng.choice([-1, 1])
-            curve_ratio = 0.25 if source_type == "bot_smart_full" else 0.35
+            curve_ratio = 0.30 if source_type == "bot_adversarial" else (0.25 if source_type == "bot_smart_full" else 0.35)
             amplitude = dist * curve_ratio * sign
             plan["control"] = (midpoint[0] + amplitude * normal[0], midpoint[1] + amplitude * normal[1])
+
+            if source_type == "bot_adversarial":
+                ctrl = plan["control"]
+                u_arr = np.linspace(0.0, 1.0, 101)
+                d1_x = 2 * (1 - u_arr) * (ctrl[0] - start[0]) + 2 * u_arr * (target[0] - ctrl[0])
+                d1_y = 2 * (1 - u_arr) * (ctrl[1] - start[1]) + 2 * u_arr * (target[1] - ctrl[1])
+                speed_u = np.hypot(d1_x, d1_y)
+                d2_x = np.full_like(u_arr, 2 * (target[0] - 2 * ctrl[0] + start[0]))
+                d2_y = np.full_like(u_arr, 2 * (target[1] - 2 * ctrl[1] + start[1]))
+                cross = np.abs(d1_x * d2_y - d1_y * d2_x)
+                kappa_u = cross / np.maximum(speed_u ** 3, 1e-6)
+
+                bell = 30.0 * (u_arr ** 2) * ((1.0 - u_arr) ** 2) + 0.08
+                v_target = (kappa_u + 1e-4) ** (-1.0 / 3.0) * bell
+                v_target = np.maximum(v_target, 0.05)
+
+                du = u_arr[1] - u_arr[0]
+                dt_steps = (speed_u * du) / v_target
+                t_cum = np.r_[0.0, np.cumsum(dt_steps[:-1])]
+                t_norm = (t_cum / t_cum[-1]) * plan["duration"]
+                plan["adv_t_lut"] = t_norm.tolist()
+                plan["adv_u_lut"] = u_arr.tolist()
         elif source_type == "bot_noisy":
             amp = min(12.0, dist * 0.03)
             plan["noise_knots"] = [0.0] + [rng.uniform(-amp, amp) for _ in range(7)] + [0.0]
@@ -465,6 +572,18 @@ class LiveDemoApp:
             tremor = 2.5 * env * (0.7 * math.sin(2 * math.pi * 10.0 * elapsed + phi1) +
                                   0.3 * math.cos(2 * math.pi * 18.0 * elapsed + phi2))
             return (bx + tremor * plan["normal"][0], by + tremor * plan["normal"][1])
+
+        if plan["source_type"] == "bot_adversarial":
+            t_lut = np.array(plan["adv_t_lut"])
+            u_lut = np.array(plan["adv_u_lut"])
+            t_query = min(plan["duration"], max(0.0, elapsed))
+            u = float(np.interp(t_query, t_lut, u_lut))
+            control = plan["control"]
+            base = tuple((1 - u) ** 2 * start[i] + 2 * (1 - u) * u * control[i] + u * u * target[i] for i in (0, 1))
+            env = 4.0 * u * (1.0 - u)
+            phi1, _ = plan.get("tremor_phases", (0.0, 0.0))
+            tremor = 1.8 * env * math.sin(2 * math.pi * 9.0 * elapsed + phi1)
+            return tuple(base[i] + tremor * plan["normal"][i] for i in (0, 1))
 
         u = tau
         if plan["source_type"] == "bot_curved":
@@ -577,13 +696,13 @@ class LiveDemoApp:
         # 1. Fast in-memory metric extraction
         metrics = extract_live_metrics(self.trajectory)
 
-        # 2. Decision tree classification
-        pred_bin, pred_multi = self.classifier.predict(metrics)
+        # 2. Random Forest probability classification
+        pred_bin, conf_bin, pred_multi, conf_multi = self.classifier.predict(metrics)
 
         # 3. Update live decision card
-        self.display_live_verdict(pred_bin, pred_multi, metrics)
+        self.display_live_verdict(pred_bin, conf_bin, pred_multi, conf_multi, metrics)
 
-    def display_live_verdict(self, pred_bin, pred_multi, m):
+    def display_live_verdict(self, pred_bin, conf_bin, pred_multi, conf_multi, m):
         is_human = (pred_bin == "human")
         actual = self.active_source
         actual_name = self.source_names_he.get(actual, actual)
@@ -592,25 +711,25 @@ class LiveDemoApp:
         if is_human:
             bg_col = "#e8f5e9"
             border_col = "#2e7d32"
-            title_text = "🟢 תוצאת סיווג: 👤 זוהתה תנועה אנושית! (Human Movement)"
+            title_text = f"🟢 תוצאת סיווג: 👤 תנועה אנושית! (רמת ביטחון: {conf_bin * 100:.1f}%)"
             fg_col = "#1b5e20"
         else:
             bg_col = "#ffebee"
             border_col = "#c62828"
-            title_text = f"🔴 תוצאת סיווג: 🤖 זוהה בוט אוטומטי! [{pred_name}]"
+            title_text = f"🔴 תוצאת סיווג: 🤖 בוט [{pred_name}]! (רמת ביטחון: {conf_bin * 100:.1f}%)"
             fg_col = "#b71c1c"
 
         # Format details
         p2m = m.get("peak_to_mean_speed", 1.0)
+        t_peak = m.get("time_to_peak_ratio", 0.5)
         beta = m.get("power_law_beta", 0.0)
-        chord = m.get("max_chord_dev_px", 0.0)
-        k_mean = m.get("mean_curvature", 0.0)
+        jerk = m.get("log_dimensionless_jerk", 0.0)
+        bez_res = m.get("bezier_residual_px", 0.0)
         dur = m.get("duration_s", 0.0)
 
         details_text = (
-            f"מקור אמיתי: {actual_name} | זמן תנועה: {dur:.2f}s\n"
-            f"יחס שיא/ממוצע מהירות: {p2m:.2f} | מעריך חוק שני-השלישים (β): {beta:+.3f} | "
-            f"סטיית מיתר: {chord:.1f}px | עקמומיות ממוצעת: {k_mean:.4f}"
+            f"מקור אמיתי: {actual_name} | זמן: {dur:.2f}s | סיווג ספציפי: {pred_name} ({conf_multi * 100:.1f}%)\n"
+            f"שיא/ממוצע: {p2m:.2f} (זמן שיא: {t_peak*100:.0f}%) | סטיית בזייר: {bez_res:.1f}px | ג'רק מנורמל (log J): {jerk:.2f} | חוק שני-שלישים (β): {beta:+.3f}"
         )
 
         self.card_frame.config(bg=bg_col, bd=2)

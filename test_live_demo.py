@@ -37,9 +37,14 @@ class TestLiveDemoComponents(unittest.TestCase):
         self.assertIn("peak_to_mean_speed", metrics)
         self.assertIn("power_law_beta", metrics)
         self.assertIn("power_law_r", metrics)
+        self.assertIn("log_dimensionless_jerk", metrics)
+        self.assertIn("affine_velocity_cv", metrics)
+        self.assertIn("bezier_residual_px", metrics)
+        self.assertIn("time_to_peak_ratio", metrics)
 
         # An ideal straight line should have near-zero chord deviation and path ratio == 1.0
         self.assertLess(metrics["max_chord_dev_px"], 1e-3)
+        self.assertLess(metrics["bezier_residual_px"], 1e-3)
         self.assertAlmostEqual(metrics["path_ratio"], 1.0, places=2)
 
     def test_extract_live_metrics_arc(self):
@@ -47,6 +52,7 @@ class TestLiveDemoComponents(unittest.TestCase):
         self.assertGreater(metrics["max_chord_dev_px"], 10.0)
         self.assertGreater(metrics["total_angle_change"], 1.0)
         self.assertFalse(np.isnan(metrics["power_law_beta"]))
+        self.assertFalse(np.isnan(metrics["log_dimensionless_jerk"]))
 
     def test_extract_live_metrics_empty_or_short(self):
         metrics = extract_live_metrics([])
@@ -61,10 +67,14 @@ class TestLiveDemoComponents(unittest.TestCase):
             
             # Predict on test trajectory
             metrics = extract_live_metrics(self.arc_traj)
-            bin_pred, multi_pred = classifier.predict(metrics)
+            bin_pred, conf_b, multi_pred, conf_m = classifier.predict(metrics)
             self.assertIn(bin_pred, ["human", "bot"])
+            self.assertGreaterEqual(conf_b, 0.0)
+            self.assertLessEqual(conf_b, 1.0)
             self.assertIsInstance(multi_pred, str)
             self.assertGreater(len(multi_pred), 0)
+            self.assertGreaterEqual(conf_m, 0.0)
+            self.assertLessEqual(conf_m, 1.0)
 
     def test_classifier_fallback_heuristic(self):
         # Untrained model fallback (non-existent path)
@@ -72,11 +82,13 @@ class TestLiveDemoComponents(unittest.TestCase):
         self.assertFalse(dummy_classifier.is_trained)
 
         # Verify fallback heuristic logic
-        bin_pred, multi_pred = dummy_classifier.predict({"peak_to_mean_speed": 2.5, "power_law_beta": 0.4})
+        bin_pred, conf_b, multi_pred, conf_m = dummy_classifier.predict({"peak_to_mean_speed": 2.5, "log_dimensionless_jerk": 8.0})
         self.assertEqual(bin_pred, "human")
+        self.assertGreater(conf_b, 0.5)
 
-        bin_pred_bot, multi_pred_bot = dummy_classifier.predict({"peak_to_mean_speed": 1.0, "power_law_beta": 0.0})
+        bin_pred_bot, conf_b_bot, multi_pred_bot, conf_m_bot = dummy_classifier.predict({"peak_to_mean_speed": 1.0, "log_dimensionless_jerk": 6.0})
         self.assertEqual(bin_pred_bot, "bot")
+        self.assertGreater(conf_b_bot, 0.5)
 
 
 if __name__ == "__main__":

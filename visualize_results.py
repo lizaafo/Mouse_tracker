@@ -1,12 +1,13 @@
 """
 visualize_results.py
 
-שלב 4 בפרויקט: הפקת גרפים וויזואליזציות להשוואה בין אדם לבוטים ולהגשה בדוח הסופי.
-יוצר 4 גרפים דינמיים ושומר אותם בתיקיית plots/:
-1. trajectories_comparison.png - השוואת מסלולים מייצגים במישור
-2. features_scatter.png - תרשים פיזור עם קווי החלטה דינמיים
-3. velocity_profiles.png - פרופילי מהירות לאורך זמן (Fitts' Law / Minimum Jerk)
-4. decision_tree_diagram.png - תרשים עץ ההחלטה הגיאומטרי והקינמטי
+Step 4 of the project: Generate charts and visualizations comparing human vs bots for academic defense and final report.
+Generates 5 figures in the plots/ directory:
+1. trajectories_comparison.png - Representative 2D trajectories in screen coordinates
+2. features_scatter.png - Scatter plot with dynamic decision boundaries
+3. velocity_profiles.png - Kinematic velocity profiles over time (Fitts' Law / Minimum Jerk)
+4. decision_tree_diagram.png - Geometric and kinematic decision tree diagram
+5. two_thirds_power_law.png - Empirical validation of the Two-Thirds Power Law
 """
 
 import csv
@@ -44,7 +45,7 @@ def find_sample_trajectory(source_type):
 
 
 # =============================================================================
-# גרף 1: השוואת 4 מסלולים מייצגים במישור
+# Figure 1: Comparison of representative trajectories in the plane
 # =============================================================================
 def plot_trajectories_comparison():
     print("Generating Figure 1: Trajectories comparison...")
@@ -79,16 +80,16 @@ def plot_trajectories_comparison():
         target_x = df["target_x"].iloc[0]
         target_y = df["target_y"].iloc[0]
 
-        # ציור עיגול התחלה (ירוק) ומטרה (אדום)
+        # Draw start (green) and target (red) target circles
         start_circle = plt.Circle((start_x, start_y), 25, color="#4caf50", alpha=0.35, label="Start Circle")
         target_circle = plt.Circle((target_x, target_y), 25, color="#f44336", alpha=0.35, label="Target Circle")
         ax.add_patch(start_circle)
         ax.add_patch(target_circle)
 
-        # קו ישר מקווקו לנקודת ייחוס (מיתר ישיר)
+        # Dashed line for direct chord reference
         ax.plot([start_x, target_x], [start_y, target_y], "k--", alpha=0.3, label="Direct Chord")
 
-        # ציור המסלול
+        # Plot trajectory curve
         ax.plot(df["x"], df["y"], color=color, lw=2.2, label=f"Path ({filepath.parent.name}/{filepath.stem})")
         ax.scatter([df["x"].iloc[0]], [df["y"].iloc[0]], color="#2e7d32", s=40, zorder=5)
         ax.scatter([df["x"].iloc[-1]], [df["y"].iloc[-1]], color="#c62828", s=40, zorder=5)
@@ -98,7 +99,7 @@ def plot_trajectories_comparison():
         ax.set_ylabel("Y (pixels)")
         ax.set_aspect("equal", "datalim")
         ax.grid(True, linestyle=":", alpha=0.6)
-        ax.invert_yaxis()  # קואורדינטות מסך (0 למעלה)
+        ax.invert_yaxis()  # Screen coordinates (0 at top)
         if idx == 0:
             ax.legend(loc="best", fontsize=8)
 
@@ -111,7 +112,7 @@ def plot_trajectories_comparison():
 
 
 # =============================================================================
-# גרף 2: תרשים פיזור (Scatter Plot) עם גבולות החלטה דינמיים
+# Figure 2: Scatter plot with dynamic decision boundaries
 # =============================================================================
 def plot_features_scatter():
     print("Generating Figure 2: Features scatter plot with dynamic boundaries...")
@@ -134,6 +135,7 @@ def plot_features_scatter():
         "bot_noisy": ("#d62728", "^", "Noisy Bot"),
         "bot_smart_jerk": ("#9467bd", "P", "Min-Jerk Bot"),
         "bot_smart_full": ("#8c564b", "X", "Biomechanical Bot"),
+        "bot_adversarial": ("#d81b60", "*", "Adversarial Bot"),
     }
 
     for source, (color, marker, label) in color_map.items():
@@ -152,7 +154,7 @@ def plot_features_scatter():
             label=f"{label} (n={len(subset)})",
         )
 
-    # חילוץ דינמי של קו ההחלטה הבינארי (אדם מול בוט) מתוך עץ החלטה
+    # Dynamic extraction of binary decision boundary (human vs bot) via shallow tree
     try:
         y_bin = df["source_type"].apply(lambda s: 1 if s == "human" else 0)
         if y_bin.nunique() >= 2:
@@ -170,7 +172,7 @@ def plot_features_scatter():
     except Exception as e:
         print(f"  Note on binary threshold: {e}")
 
-    # חילוץ דינמי של גבולות ישרות עבור הבוטים הנאיביים (Linear vs Noisy vs Curved)
+    # Dynamic extraction of shape boundaries for naive bots (Linear vs Noisy vs Curved)
     try:
         df_naive = df[df["source_type"].isin(["bot_linear", "bot_noisy", "bot_curved"])]
         if not df_naive.empty and df_naive["source_type"].nunique() >= 2:
@@ -204,7 +206,7 @@ def plot_features_scatter():
 
 
 # =============================================================================
-# גרף 3: פרופילי מהירות לאורך זמן (פעמון מהירות אנושי מול בוט)
+# Figure 3: Kinematic velocity profiles over time
 # =============================================================================
 def plot_velocity_profiles():
     print("Generating Figure 3: Velocity profiles...")
@@ -215,6 +217,7 @@ def plot_velocity_profiles():
         ("Noisy Bot", "bot_noisy", "#d62728", ":"),
         ("Min-Jerk Bot", "bot_smart_jerk", "#9467bd", "-"),
         ("Biomechanical Bot", "bot_smart_full", "#8c564b", "-"),
+        ("Adversarial Bot", "bot_adversarial", "#d81b60", "--"),
     ]
 
     plt.figure(figsize=(9.5, 5.5))
@@ -231,13 +234,13 @@ def plot_velocity_profiles():
             x = df["x"].values
             y = df["y"].values
 
-            # סינון נקודות ללא תנועה
+            # Filter stationary points
             moving = (np.diff(x, prepend=x[0]) != 0) | (np.diff(y, prepend=y[0]) != 0)
             t_m, x_m, y_m = t[moving], x[moving], y[moving]
             if len(t_m) < 5 or (t_m[-1] - t_m[0]) <= 0:
                 continue
 
-            # חישוב מהירות ב-20 חלונות זמן אחידים
+            # Compute speed across 20 normalized time bins
             t_norm = (t_m - t_m[0]) / (t_m[-1] - t_m[0])
             bin_edges = np.linspace(0, 1, 21)
             bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
@@ -274,7 +277,7 @@ def plot_velocity_profiles():
 
 
 # =============================================================================
-# גרף 4: ציור עץ ההחלטה (Decision Tree Diagram)
+# Figure 4: Decision tree diagram
 # =============================================================================
 def plot_decision_tree():
     print("Generating Figure 4: Decision tree diagram...")
@@ -284,11 +287,17 @@ def plot_decision_tree():
 
     df = pd.read_csv(SUMMARY_CSV)
     features = [
+        "power_law_beta",
+        "power_law_r",
         "peak_to_mean_speed",
+        "time_to_peak_ratio",
         "max_chord_dev_px",
+        "bezier_residual_px",
         "curvature_std",
         "path_ratio",
         "total_angle_change",
+        "log_dimensionless_jerk",
+        "affine_velocity_cv",
     ]
     df_clean = df.dropna(subset=features + ["source_type"]).copy()
     if len(df_clean) < 5:
@@ -301,14 +310,14 @@ def plot_decision_tree():
     clf = DecisionTreeClassifier(max_depth=3, random_state=42)
     clf.fit(X, y)
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(13, 7.5))
     plot_tree(
         clf,
         feature_names=features,
         class_names=[str(c) for c in sorted(y.unique())],
         filled=True,
         rounded=True,
-        fontsize=10,
+        fontsize=9,
         ax=ax,
     )
     plt.title("Learned Geometric & Kinematic Decision Tree", fontsize=14, fontweight="bold", pad=12)
@@ -321,7 +330,7 @@ def plot_decision_tree():
 
 
 # =============================================================================
-# גרף 5: חוק שני-השלישים (Two-Thirds Power Law Analysis)
+# Figure 5: Two-Thirds Power Law Analysis
 # =============================================================================
 def plot_two_thirds_power_law():
     print("Generating Figure 5: Two-Thirds Power Law analysis...")
@@ -337,10 +346,10 @@ def plot_two_thirds_power_law():
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
 
-    # פאנל שמאלי: Boxplot של מעריך חוק שני השלישים (Beta) לפי סוג תנועה
-    sources_order = ["human", "bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full"]
-    labels_order = ["Human", "Linear", "Curved", "Noisy", "Min-Jerk", "Biomechanical"]
-    colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b"]
+    # Left panel: Boxplot of Two-Thirds Power Law exponent (Beta) by source
+    sources_order = ["human", "bot_linear", "bot_curved", "bot_noisy", "bot_smart_jerk", "bot_smart_full", "bot_adversarial"]
+    labels_order = ["Human", "Linear", "Curved", "Noisy", "Min-Jerk", "Biomechanical", "Adversarial"]
+    colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b", "#d81b60"]
 
     data_to_plot = []
     active_labels = []
@@ -364,7 +373,7 @@ def plot_two_thirds_power_law():
     ax1.grid(True, linestyle="--", alpha=0.55)
     ax1.legend(loc="upper right", fontsize=8.5)
 
-    # פאנל ימני: פיזור log(kappa) מול log(v) של תנועה אנושית מייצגת מול בוט
+    # Right panel: scatter log(kappa) vs log(v) of representative human vs bot
     human_file = find_sample_trajectory("human")
     bot_file = find_sample_trajectory("bot_smart_full") or find_sample_trajectory("bot_curved")
 
